@@ -9,6 +9,7 @@ import androidx.room.Room
 import com.yuzi.odana.data.AppDatabase
 import com.yuzi.odana.data.FlowEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
@@ -133,9 +134,43 @@ object FlowManager {
             saveFlows(staleEntries)
         }
     }
+
+    suspend fun flushAllFlows() {
+        Log.i(TAG, "Flushing all active flows to database...")
+        val allFlows = ArrayList(activeFlows.values)
+        activeFlows.clear()
+        
+        // Try to resolve names one last time for any that are still unknown
+        allFlows.forEach { flow ->
+            if (flow.appName == null || flow.appName!!.startsWith("UID:")) {
+                 // We can't easily pass the packet here, but if we have the UID we can try.
+                 // However, resolveAppUid requires a packet for connection owner lookup.
+                 // If we already have the UID (from previous lookup), we can try to fetch the name again.
+                 if (flow.appUid != null) {
+                     try {
+                         // Re-run just the name lookup part
+                         val uid = flow.appUid!!
+                         val name = if (uidCache.containsKey(uid)) {
+                             uidCache[uid]
+                         } else {
+                             val packages = packageManager?.getPackagesForUid(uid)
+                             if (!packages.isNullOrEmpty()) packages[0] else "UID:$uid"
+                         }
+                         flow.appName = name
+                     } catch (e: Exception) {
+                         // Ignore
+                     }
+                 }
+            }
+        }
+
+        if (allFlows.isNotEmpty()) {
+            saveFlows(allFlows)
+        }
+    }
     
     private suspend fun saveFlows(flows: List<Flow>) {
-        withContext(Dispatchers.IO) {
+        withContext(NonCancellable + Dispatchers.IO) {
             flows.forEach { flow ->
                 val entity = FlowEntity(
                     timestamp = flow.startTime,

@@ -109,11 +109,23 @@ class OdanaVpnService : VpnService() {
     private fun stopVpn() {
         Log.i(TAG, "Stopping VPN Service...")
         isRunning = false
+        
+        // We use runBlocking to ensure the flush completes before we kill the service/scope.
+        // This blocks the main thread, but since we are stopping, it is acceptable for a short DB write.
+        try {
+            kotlinx.coroutines.runBlocking {
+                FlowManager.flushAllFlows()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error flushing flows on stop", e)
+        }
+
         try {
             vpnInterface?.close()
         } catch (e: IOException) {
             Log.e(TAG, "Error closing interface", e)
         }
+        
         serviceScope.cancel()
         stopForeground(true)
         stopSelf()
