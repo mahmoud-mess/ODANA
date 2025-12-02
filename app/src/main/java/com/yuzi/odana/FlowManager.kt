@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 object FlowManager {
     private const val TAG = "FlowManager"
     private val activeFlows = ConcurrentHashMap<FlowKey, Flow>()
+    private val uidCache = ConcurrentHashMap<Int, String>()
     private const val UDP_TIMEOUT_MS = 60000L // 60 seconds
     
     private var connectivityManager: ConnectivityManager? = null
@@ -64,11 +65,32 @@ object FlowManager {
                 
                 if (uid != -1) {
                     flow.appUid = uid
-                    val packages = packageManager?.getPackagesForUid(uid)
-                    flow.appName = if (!packages.isNullOrEmpty()) {
-                        packages[0]
-                    } else {
-                         packageManager?.getNameForUid(uid) ?: "UID:$uid"
+                    
+                    // Check Cache
+                    if (uidCache.containsKey(uid)) {
+                        flow.appName = uidCache[uid]
+                        return
+                    }
+
+                    var name: String? = null
+                    try {
+                        val packages = packageManager?.getPackagesForUid(uid)
+                        name = if (!packages.isNullOrEmpty()) {
+                            packages[0] // Return the package name (e.g. com.google.android.youtube)
+                        } else {
+                            "UID:$uid"
+                        }
+                    } catch (e: SecurityException) {
+                        Log.w(TAG, "Cross-profile access denied for UID $uid")
+                        name = "DualApp/WorkProfile:$uid"
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error resolving package for UID $uid", e)
+                        name = "UID:$uid"
+                    }
+                    
+                    if (name != null) {
+                        flow.appName = name
+                        uidCache[uid] = name
                     }
                 }
             } catch (e: Exception) {

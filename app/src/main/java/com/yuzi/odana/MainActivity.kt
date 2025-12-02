@@ -36,7 +36,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    VpnScreen(onStartClick = { checkAndStartVpn() })
+                    VpnScreen()
                 }
             }
         }
@@ -54,24 +54,44 @@ class MainActivity : ComponentActivity() {
     private fun startVpnService() {
         val intent = Intent(this, OdanaVpnService::class.java)
         intent.action = OdanaVpnService.ACTION_START
-        startForegroundService(intent) // Required for Android O+
+        startForegroundService(intent)
     }
-}
 
-@Composable
-fun VpnScreen(onStartClick: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "ODANA Network Analyzer",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Spacer(modifier = Modifier.height(32.dp))
-        Button(onClick = onStartClick) {
-            Text("Start Monitoring")
+    private fun stopVpnService() {
+        val intent = Intent(this, OdanaVpnService::class.java)
+        intent.action = OdanaVpnService.ACTION_STOP
+        startService(intent)
+    }
+
+    @Composable
+    fun VpnScreen() {
+        var isRunning by remember { mutableStateOf(false) }
+        
+        // Simple way to sync state for prototype (In production, listen to Service status)
+        LaunchedEffect(Unit) {
+             // TODO: Check actual service status
+        }
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "ODANA Network Analyzer",
+                style = MaterialTheme.typography.headlineMedium
+            )
+            Spacer(modifier = Modifier.height(32.dp))
+            Button(onClick = {
+                if (isRunning) {
+                    stopVpnService()
+                } else {
+                    checkAndStartVpn()
+                }
+                isRunning = !isRunning
+            }) {
+                Text(if (isRunning) "Stop Monitoring" else "Start Monitoring")
+            }
         }
     }
 }
