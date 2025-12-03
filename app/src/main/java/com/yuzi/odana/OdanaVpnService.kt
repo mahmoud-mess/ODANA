@@ -80,7 +80,7 @@ class OdanaVpnService : VpnService() {
     private fun startCleanupLoop() {
         serviceScope.launch {
             while (isRunning) {
-                kotlinx.coroutines.delay(10000) // Check every 10s
+                kotlinx.coroutines.delay(5000) // Check every 5s for more responsive cleanup
                 FlowManager.cleanupStaleFlows()
             }
         }
@@ -148,20 +148,22 @@ class OdanaVpnService : VpnService() {
         nioProxy?.stop()
         nioProxy = null
         
-        // We use runBlocking to ensure the flush completes before we kill the service/scope.
-        // This blocks the main thread, but since we are stopping, it is acceptable for a short DB write.
-        try {
-            kotlinx.coroutines.runBlocking {
-                FlowManager.flushAllFlows()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error flushing flows on stop", e)
-        }
-
         try {
             vpnInterface?.close()
         } catch (e: IOException) {
             Log.e(TAG, "Error closing interface", e)
+        }
+        
+        // Async flush - don't block UI
+        // Use a separate scope that survives serviceScope cancellation
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                Log.i(TAG, "Flushing flows in background...")
+                FlowManager.flushAllFlows()
+                Log.i(TAG, "Flow flush complete")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error flushing flows on stop", e)
+            }
         }
         
         serviceScope.cancel()

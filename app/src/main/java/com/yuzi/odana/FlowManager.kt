@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.room.Room
 import com.yuzi.odana.data.AppDatabase
 import com.yuzi.odana.data.FlowEntity
+import com.yuzi.odana.data.FlowFeatures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -25,9 +26,18 @@ object FlowManager {
     private val uidCache = ConcurrentHashMap<Int, String>()
     private const val UDP_TIMEOUT_MS = 60000L // 60 seconds
     
+    // Tuned for reliability
+    private const val BATCH_SIZE = 20              // Smaller batches = more frequent, lighter writes
+    private const val STALE_TIMEOUT_MS = 15000L    // 15 seconds idle = stale
+    private const val RETENTION_DAYS = 14          // Keep detailed flows for 14 days
+    
     private var connectivityManager: ConnectivityManager? = null
     private var packageManager: PackageManager? = null
     var db: AppDatabase? = null
+    
+    // Track if we're currently flushing to show UI indicator
+    private val _isFlushing = MutableStateFlow(false)
+    val isFlushing: StateFlow<Boolean> = _isFlushing
 
     // Live Flow State
     private val managerScope = CoroutineScope(Dispatchers.Default)
@@ -146,7 +156,6 @@ object FlowManager {
     suspend fun cleanupStaleFlows() {
         val now = System.currentTimeMillis()
         val staleEntries = mutableListOf<Flow>()
-        val batchSize = 50
         
         val iterator = activeFlows.entries.iterator()
         while (iterator.hasNext()) {
@@ -154,16 +163,16 @@ object FlowManager {
             val flow = entry.value
             
             // Eviction Criteria:
-            // 1. TCP Connection Closed (FIN/RST)
-            // 2. Idle for > 30 seconds (UDP or stuck TCP)
-            val isStale = flow.isClosed || (now - flow.lastUpdated > 30000)
+            // 1. TCP Connection Closed (FIN/RST) - persist immediately
+            // 2. Idle for > STALE_TIMEOUT_MS (UDP or stuck TCP)
+            val isStale = flow.isClosed || (now - flow.lastUpdated > STALE_TIMEOUT_MS)
             
             if (isStale) {
                 staleEntries.add(flow)
                 iterator.remove()
                 
-                // Batch Save to prevent memory spike if many flows close at once
-                if (staleEntries.size >= batchSize) {
+                // Smaller batch saves = more frequent but lighter writes
+                if (staleEntries.size >= BATCH_SIZE) {
                     saveFlows(staleEntries.toList())
                     staleEntries.clear()
                 }
@@ -175,44 +184,81 @@ object FlowManager {
             saveFlows(staleEntries)
         }
     }
-
-    suspend fun flushAllFlows() {
-        Log.i(TAG, "Flushing all active flows to database...")
-        val allFlows = ArrayList(activeFlows.values)
-        activeFlows.clear()
-        
-        // Try to resolve names one last time for any that are still unknown
-        allFlows.forEach { flow ->
-            if (flow.appName == null || flow.appName!!.startsWith("UID:")) {
-                 // We can't easily pass the packet here, but if we have the UID we can try.
-                 // However, resolveAppUid requires a packet for connection owner lookup.
-                 // If we already have the UID (from previous lookup), we can try to fetch the name again.
-                 if (flow.appUid != null) {
-                     try {
-                         // Re-run just the name lookup part
-                         val uid = flow.appUid!!
-                         val name = if (uidCache.containsKey(uid)) {
-                             uidCache[uid]
-                         } else {
-                             val packages = packageManager?.getPackagesForUid(uid)
-                             if (!packages.isNullOrEmpty()) packages[0] else "UID:$uid"
-                         }
-                         flow.appName = name
-                     } catch (e: Exception) {
-                         // Ignore
-                     }
-                 }
+    
+    /**
+     * Clean up flows older than RETENTION_DAYS.
+     * Should be called periodically (e.g., once per day via WorkManager).
+     */
+    suspend fun cleanupOldFlows() {
+        withContext(Dispatchers.IO) {
+            val cutoffTime = System.currentTimeMillis() - (RETENTION_DAYS * 24 * 60 * 60 * 1000L)
+            try {
+                val deleted = db?.flowDao()?.deleteFlowsOlderThan(cutoffTime) ?: 0
+                if (deleted > 0) {
+                    Log.i(TAG, "Cleaned up $deleted flows older than $RETENTION_DAYS days")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning up old flows", e)
             }
         }
+    }
 
-        if (allFlows.isNotEmpty()) {
-            saveFlows(allFlows)
+    suspend fun flushAllFlows() {
+        _isFlushing.value = true
+        Log.i(TAG, "Flushing all active flows to database...")
+        
+        try {
+            val allFlows = ArrayList(activeFlows.values)
+            activeFlows.clear()
+            
+            // Update UI immediately to show flows are gone
+            _activeFlowsState.value = emptyList()
+            
+            // Try to resolve names one last time for any that are still unknown
+            allFlows.forEach { flow ->
+                if (flow.appName == null || flow.appName!!.startsWith("UID:")) {
+                    if (flow.appUid != null) {
+                        try {
+                            val uid = flow.appUid!!
+                            val name = if (uidCache.containsKey(uid)) {
+                                uidCache[uid]
+                            } else {
+                                val packages = packageManager?.getPackagesForUid(uid)
+                                if (!packages.isNullOrEmpty()) packages[0] else "UID:$uid"
+                            }
+                            flow.appName = name
+                        } catch (e: Exception) {
+                            // Ignore
+                        }
+                    }
+                }
+            }
+
+            // Save in smaller chunks to avoid memory pressure
+            if (allFlows.isNotEmpty()) {
+                allFlows.chunked(BATCH_SIZE).forEach { chunk ->
+                    saveFlows(chunk)
+                    // Small delay between batches to let GC breathe
+                    delay(50)
+                }
+            }
+            
+            // Also run retention cleanup while we're at it
+            cleanupOldFlows()
+            
+        } finally {
+            _isFlushing.value = false
+            Log.i(TAG, "Flush complete")
         }
     }
     
     private suspend fun saveFlows(flows: List<Flow>) {
         withContext(NonCancellable + Dispatchers.IO) {
+            val entities = mutableListOf<FlowEntity>()
+            val features = mutableListOf<FlowFeatures>()
+            
             flows.forEach { flow ->
+                // Create flow entity for history
                 val entity = FlowEntity(
                     timestamp = flow.startTime,
                     appUid = flow.appUid,
@@ -227,11 +273,33 @@ object FlowManager {
                     payloadHex = flow.getPayloadHex(),
                     payloadText = flow.getPayloadText()
                 )
+                entities.add(entity)
+                
+                // Extract ML features (compact, fixed-size)
                 try {
-                    db?.flowDao()?.insert(entity)
+                    val feature = FlowFeatures.fromFlow(flow, flow.detectedSni)
+                    features.add(feature)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error saving flow", e)
+                    Log.w(TAG, "Failed to extract features for flow", e)
                 }
+            }
+            
+            // Batch insert entities
+            try {
+                entities.forEach { entity ->
+                    db?.flowDao()?.insert(entity)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error saving flow entities", e)
+            }
+            
+            // Batch insert features
+            try {
+                if (features.isNotEmpty()) {
+                    db?.featureDao()?.insertAll(features)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error saving flow features", e)
             }
         }
     }

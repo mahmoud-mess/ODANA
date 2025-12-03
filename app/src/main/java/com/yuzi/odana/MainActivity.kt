@@ -2,6 +2,7 @@ package com.yuzi.odana
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -9,6 +10,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import com.yuzi.odana.data.CleanupWorker
+import com.yuzi.odana.data.ExportManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
@@ -48,7 +54,6 @@ import com.yuzi.odana.data.FlowSummary
 import com.yuzi.odana.ui.components.*
 import com.yuzi.odana.ui.formatBytes
 import com.yuzi.odana.ui.theme.*
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
@@ -62,6 +67,14 @@ class MainActivity : ComponentActivity() {
             startVpnService()
         }
     }
+    
+    // Export file creation launcher
+    private var pendingExportType: String? = null
+    private val createDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        uri?.let { handleExportUri(it) }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,6 +82,9 @@ class MainActivity : ComponentActivity() {
         
         FlowManager.initialize(applicationContext)
         val dao = FlowManager.db!!.flowDao()
+        
+        // Schedule daily cleanup worker
+        CleanupWorker.schedule(this)
 
         setContent {
             ODANATheme {
@@ -78,10 +94,54 @@ class MainActivity : ComponentActivity() {
                 AppNavigation(
                     viewModel = viewModel,
                     onStartVpn = { checkAndStartVpn() },
-                    onStopVpn = { stopVpnService() }
+                    onStopVpn = { stopVpnService() },
+                    onExportJson = { startExport("json") },
+                    onExportCsv = { startExport("csv") }
                 )
             }
         }
+    }
+    
+    private fun startExport(type: String) {
+        pendingExportType = type
+        val filename = ExportManager.generateFilename(type)
+        val mimeType = if (type == "json") "application/json" else "text/csv"
+        
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            setType(mimeType)
+            putExtra(Intent.EXTRA_TITLE, filename)
+        }
+        
+        try {
+            startActivityForResult(intent, EXPORT_REQUEST_CODE)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to start export", e)
+        }
+    }
+    
+    private fun handleExportUri(uri: Uri) {
+        val type = pendingExportType ?: return
+        pendingExportType = null
+        
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+            when (type) {
+                "json" -> ExportManager.exportToJson(this@MainActivity, uri)
+                "csv" -> ExportManager.exportToCsv(this@MainActivity, uri)
+            }
+        }
+    }
+    
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == EXPORT_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
+            data?.data?.let { handleExportUri(it) }
+        }
+    }
+    
+    companion object {
+        private const val EXPORT_REQUEST_CODE = 1001
     }
 
     private fun checkAndStartVpn() {
@@ -110,7 +170,9 @@ class MainActivity : ComponentActivity() {
 fun AppNavigation(
     viewModel: MainViewModel,
     onStartVpn: () -> Unit,
-    onStopVpn: () -> Unit
+    onStopVpn: () -> Unit,
+    onExportJson: () -> Unit,
+    onExportCsv: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     
@@ -120,7 +182,7 @@ fun AppNavigation(
             onBack = { viewModel.onFlowDeselected() }
         )
     } else {
-        MainTabScreen(viewModel, onStartVpn, onStopVpn)
+        MainTabScreen(viewModel, onStartVpn, onStopVpn, onExportJson, onExportCsv)
     }
 }
 
@@ -128,10 +190,13 @@ fun AppNavigation(
 fun MainTabScreen(
     viewModel: MainViewModel,
     onStartVpn: () -> Unit,
-    onStopVpn: () -> Unit
+    onStopVpn: () -> Unit,
+    onExportJson: () -> Unit,
+    onExportCsv: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val uiState by viewModel.uiState.collectAsState()
+    val isFlushing by FlowManager.isFlushing.collectAsState()
     
     // VPN state lifted here so it persists across tab switches
     // Initialize based on whether there are active flows (indicates VPN is running)
@@ -144,33 +209,80 @@ fun MainTabScreen(
         }
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            ModernNavigationBar(
-                selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it },
-                activeConnections = uiState.activeFlowsCount
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-        ) {
-            when (selectedTab) {
-                0 -> DashboardScreen(viewModel)
-                1 -> MonitorScreen(
-                    viewModel = viewModel,
-                    isVpnActive = isVpnActive,
-                    onVpnToggle = { active ->
-                        isVpnActive = active
-                        if (active) onStartVpn() else onStopVpn()
-                    },
-                    onFlowClick = { viewModel.onFlowSelected(it) }
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                ModernNavigationBar(
+                    selectedTab = selectedTab,
+                    onTabSelected = { selectedTab = it },
+                    activeConnections = uiState.activeFlowsCount
                 )
-                2 -> StatsScreen(viewModel)
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+            ) {
+                when (selectedTab) {
+                    0 -> DashboardScreen(viewModel)
+                    1 -> MonitorScreen(
+                        viewModel = viewModel,
+                        isVpnActive = isVpnActive,
+                        onVpnToggle = { active ->
+                            isVpnActive = active
+                            if (active) onStartVpn() else onStopVpn()
+                        },
+                        onFlowClick = { viewModel.onFlowSelected(it) }
+                    )
+                    2 -> StatsScreen(
+                        viewModel = viewModel,
+                        onExportJson = onExportJson,
+                        onExportCsv = onExportCsv
+                    )
+                }
+            }
+        }
+        
+        // Flushing overlay indicator
+        if (isFlushing) {
+            FlushingOverlay()
+        }
+    }
+}
+
+@Composable
+private fun FlushingOverlay() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f)),
+        contentAlignment = Alignment.Center
+    ) {
+        GlassCard(
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator(
+                    color = Wisteria400,
+                    modifier = Modifier.size(48.dp)
+                )
+                Text(
+                    text = "Saving flows...",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Please wait",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
             }
         }
     }

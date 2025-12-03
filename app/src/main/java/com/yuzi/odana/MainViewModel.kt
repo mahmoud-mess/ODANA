@@ -42,17 +42,31 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
     private var searchJob: Job? = null
 
     init {
+        // Observe active flows for live updates
         viewModelScope.launch {
             FlowManager.activeFlowsState.collectLatest { activeFlows ->
                 _uiState.value = _uiState.value.copy(activeFlowsCount = activeFlows.size)
                 if (_uiState.value.page == 0 && _uiState.value.searchQuery.isBlank()) {
-                    // Optimization: Only auto-refresh on page 0 active
                     if (_uiState.value.selectedFlow == null) {
                         loadData(refreshActive = true)
                     }
                 }
             }
         }
+        
+        // Observe flush completion to refresh data after VPN stops
+        viewModelScope.launch {
+            var wasFlusing = false
+            FlowManager.isFlushing.collect { isFlushing ->
+                if (wasFlusing && !isFlushing) {
+                    // Flush just completed - reload to show persisted flows
+                    delay(100) // Small delay to ensure DB writes are committed
+                    loadData()
+                }
+                wasFlusing = isFlushing
+            }
+        }
+        
         viewModelScope.launch {
             appUsageStats.collect { usageList ->
                 val totalBytes = usageList.sumOf { it.totalBytes }

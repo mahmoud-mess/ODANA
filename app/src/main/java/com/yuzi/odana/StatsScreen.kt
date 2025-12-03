@@ -2,6 +2,7 @@ package com.yuzi.odana
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -19,13 +20,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.yuzi.odana.data.AppUsage
+import com.yuzi.odana.data.ExportManager
 import com.yuzi.odana.ui.components.*
 import com.yuzi.odana.ui.formatBytes
 import com.yuzi.odana.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatsScreen(viewModel: MainViewModel) {
+fun StatsScreen(
+    viewModel: MainViewModel,
+    onExportJson: () -> Unit = {},
+    onExportCsv: () -> Unit = {}
+) {
     val stats: List<AppUsage> by viewModel.appUsageStats.collectAsState()
     
     val maxBytes = remember(stats) {
@@ -73,6 +79,25 @@ fun StatsScreen(viewModel: MainViewModel) {
         formatBytes(total)
     }
 
+    val exportState by ExportManager.exportState.collectAsState()
+    var showExportMenu by remember { mutableStateOf(false) }
+    
+    // Show snackbar for export results
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(exportState) {
+        when (val state = exportState) {
+            is ExportManager.ExportState.Success -> {
+                snackbarHostState.showSnackbar("Exported ${state.flowCount} flows")
+                ExportManager.resetState()
+            }
+            is ExportManager.ExportState.Error -> {
+                snackbarHostState.showSnackbar("Export failed: ${state.message}")
+                ExportManager.resetState()
+            }
+            else -> {}
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -113,19 +138,78 @@ fun StatsScreen(viewModel: MainViewModel) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Header
+                // Header with export button
                 item {
-                    Text(
-                        text = "Data Usage",
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Breakdown by application",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column {
+                            Text(
+                                text = "Data Usage",
+                                style = MaterialTheme.typography.headlineLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "Breakdown by application",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                            )
+                        }
+                        
+                        // Export button with dropdown
+                        Box {
+                            IconButton(
+                                onClick = { showExportMenu = true },
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                if (exportState is ExportManager.ExportState.Exporting) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Wisteria400
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Outlined.FileDownload,
+                                        contentDescription = "Export",
+                                        tint = Wisteria400
+                                    )
+                                }
+                            }
+                            
+                            DropdownMenu(
+                                expanded = showExportMenu,
+                                onDismissRequest = { showExportMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Export as JSON") },
+                                    leadingIcon = { 
+                                        Icon(Icons.Outlined.Code, contentDescription = null) 
+                                    },
+                                    onClick = {
+                                        showExportMenu = false
+                                        onExportJson()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Export as CSV") },
+                                    leadingIcon = { 
+                                        Icon(Icons.Outlined.TableChart, contentDescription = null) 
+                                    },
+                                    onClick = {
+                                        showExportMenu = false
+                                        onExportCsv()
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
                 
                 // Donut Chart Card
@@ -218,6 +302,12 @@ fun StatsScreen(viewModel: MainViewModel) {
                 }
             }
         }
+        
+        // Snackbar host for export messages
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 }
 

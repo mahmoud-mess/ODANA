@@ -23,8 +23,12 @@ class Flow(val key: FlowKey) {
     var appName: String? = null
     var detectedSni: String? = null
     
-    // Payload Capture (Limit 3MB)
+    // Payload Capture (Limit 256KB - enough for TLS fingerprinting & inspection)
     private val payloadStream = java.io.ByteArrayOutputStream()
+    
+    companion object {
+        const val MAX_PAYLOAD_SIZE = 262144 // 256KB
+    }
     
     fun addPacket(packet: Packet) {
         val now = System.currentTimeMillis()
@@ -53,9 +57,9 @@ class Flow(val key: FlowKey) {
         }
         lastPacketTime = now
         
-        // Capture Payload
+        // Capture Payload (256KB limit)
         packet.payload?.let { buffer ->
-            if (payloadStream.size() < 3145728) {
+            if (payloadStream.size() < MAX_PAYLOAD_SIZE) {
                 val remaining = buffer.remaining()
                 if (remaining > 0) {
                     val bytes = ByteArray(remaining)
@@ -63,7 +67,7 @@ class Flow(val key: FlowKey) {
                     buffer.get(bytes)
                     buffer.position(pos) // Restore position for other readers
                     
-                    val space = 3145728 - payloadStream.size()
+                    val space = MAX_PAYLOAD_SIZE - payloadStream.size()
                     val toWrite = kotlin.math.min(remaining, space)
                     payloadStream.write(bytes, 0, toWrite)
                 }
