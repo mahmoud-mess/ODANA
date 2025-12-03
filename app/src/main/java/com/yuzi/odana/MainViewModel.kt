@@ -82,7 +82,7 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
             // 1. Check active flows first
             val active = FlowManager.activeFlowsState.value.find { 
                 // Match key heuristic (IP/Port)
-                it.key.dstIp == summary.remoteIp && it.key.dstPort == summary.remotePort && it.key.protocol == summary.protocol
+                it.key.destIp == summary.remoteIp && it.key.destPort == summary.remotePort && it.key.protocol == summary.protocol
                 // Note: ID doesn't exist for active flows yet
             }
             
@@ -92,8 +92,8 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
                     timestamp = active.startTime,
                     appUid = active.appUid,
                     appName = active.appName,
-                    remoteIp = active.key.dstIp,
-                    remotePort = active.key.dstPort,
+                    remoteIp = active.key.destIp,
+                    remotePort = active.key.destPort,
                     protocol = active.key.protocol,
                     bytes = active.bytes,
                     packets = active.packets,
@@ -105,8 +105,28 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
                 _uiState.value = _uiState.value.copy(selectedFlow = entity)
             } else {
                 // 2. Fetch from DB
-                val entity = flowDao.getFlowById(summary.id)
-                _uiState.value = _uiState.value.copy(selectedFlow = entity)
+                try {
+                    val entity = flowDao.getFlowById(summary.id)
+                    _uiState.value = _uiState.value.copy(selectedFlow = entity)
+                } catch (e: Exception) {
+                    // Handle CursorWindow or other DB errors
+                    val errorEntity = FlowEntity(
+                        id = summary.id,
+                        timestamp = summary.timestamp,
+                        appUid = summary.appUid,
+                        appName = summary.appName,
+                        remoteIp = summary.remoteIp,
+                        remotePort = summary.remotePort,
+                        protocol = summary.protocol,
+                        bytes = summary.bytes,
+                        packets = summary.packets,
+                        durationMs = summary.durationMs,
+                        sni = summary.sni,
+                        payloadHex = "Error loading payload: ${e.message}",
+                        payloadText = null
+                    )
+                    _uiState.value = _uiState.value.copy(selectedFlow = errorEntity)
+                }
             }
         }
     }
@@ -131,9 +151,9 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
                 val rawActive = FlowManager.activeFlowsState.value
                 val filtered = if (query.isBlank()) rawActive else rawActive.filter { flow ->
                         (flow.appName?.contains(query, true) == true) ||
-                        (flow.key.dstIp.contains(query, true)) ||
+                        (flow.key.destIp.contains(query, true)) ||
                         (flow.detectedSni?.contains(query, true) == true) ||
-                        (flow.key.dstPort.toString().contains(query))
+                        (flow.key.destPort.toString().contains(query))
                 }
                 filtered.map { flow ->
                     FlowSummary(
@@ -141,8 +161,8 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
                         timestamp = flow.startTime,
                         appUid = flow.appUid,
                         appName = flow.appName,
-                        remoteIp = flow.key.dstIp,
-                        remotePort = flow.key.dstPort,
+                        remoteIp = flow.key.destIp,
+                        remotePort = flow.key.destPort,
                         protocol = flow.key.protocol,
                         bytes = flow.bytes,
                         packets = flow.packets,

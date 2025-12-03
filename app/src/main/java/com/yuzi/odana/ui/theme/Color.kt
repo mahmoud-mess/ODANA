@@ -2,10 +2,28 @@ package com.yuzi.odana.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Deep Ocean Palette
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Primary (Cyan-Teal)
+val OceanBlue = Color(0xFF00BCD4)
+val OceanBlueDark = Color(0xFF00838F)
+val OceanBlueLight = Color(0xFFB2EBF2)
+
+// Secondary (Slate)
+val SlateGray = Color(0xFF455A64)
+val SlateGrayDark = Color(0xFF263238)
+
+// Accent (Deep Pink for UDP/Highlight)
+val CoralPink = Color(0xFFE91E63)
+
+// Semantic
+val SuccessGreen = Color(0xFF4CAF50)
+val ErrorRed = Color(0xFFD32F2F)
+val WarningOrange = Color(0xFFFF9800)
+
+// Neutral / Surface
+val NeutralWhite = Color(0xFFFFFFFF)
+val NeutralGrey50 = Color(0xFFF5F7FA)
+val NeutralGrey100 = Color(0xFFECEFF1)
+val NeutralGrey900 = Color(0xFF121212)
+val NeutralGrey800 = Color(0xFF212121)

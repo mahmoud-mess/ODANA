@@ -1,9 +1,11 @@
 package com.yuzi.odana
 
 data class FlowKey(
-    val protocol: Int,
-    val srcIp: String,
-    val srcPort: Int,
-    val dstIp: String,
-    val dstPort: Int
-)
+    val sourceIp: String,
+    val sourcePort: Int,
+    val destIp: String,
+    val destPort: Int,
+    val protocol: Int
+) {
+    override fun toString(): String = "$sourceIp:$sourcePort|$destIp:$destPort|$protocol"
+}

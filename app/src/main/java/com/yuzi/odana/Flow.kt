@@ -7,6 +7,14 @@ class Flow(val key: FlowKey) {
     var packets: Long = 0
     var bytes: Long = 0
     
+    // ML Features
+    var bytesOut: Long = 0
+    var bytesIn: Long = 0
+    var packetSizes = LongArray(5) { 0 }
+    var iatSum: Double = 0.0
+    var iatSumSq: Double = 0.0
+    private var lastPacketTime: Long = startTime
+    
     // State
     var isClosed: Boolean = false
     
@@ -15,17 +23,39 @@ class Flow(val key: FlowKey) {
     var appName: String? = null
     var detectedSni: String? = null
     
-    // Payload Capture (Limit 1MB)
+    // Payload Capture (Limit 3MB)
     private val payloadStream = java.io.ByteArrayOutputStream()
     
     fun addPacket(packet: Packet) {
-        lastUpdated = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        lastUpdated = now
         packets++
         bytes += packet.totalLength
         
+        // ML: Traffic Direction (Assuming key.sourceIp is the App/Local IP)
+        // Comparing String IPs is safe here
+        if (packet.getSrcIp() == key.sourceIp) {
+            bytesOut += packet.totalLength
+        } else {
+            bytesIn += packet.totalLength
+        }
+        
+        // ML: First N Packet Sizes
+        if (packets <= 5) {
+            packetSizes[packets.toInt() - 1] = packet.totalLength.toLong()
+        }
+        
+        // ML: IAT (Inter-Arrival Time)
+        if (packets > 1) {
+            val iat = (now - lastPacketTime).toDouble()
+            iatSum += iat
+            iatSumSq += (iat * iat)
+        }
+        lastPacketTime = now
+        
         // Capture Payload
         packet.payload?.let { buffer ->
-            if (payloadStream.size() < 1048576) {
+            if (payloadStream.size() < 3145728) {
                 val remaining = buffer.remaining()
                 if (remaining > 0) {
                     val bytes = ByteArray(remaining)
@@ -33,7 +63,7 @@ class Flow(val key: FlowKey) {
                     buffer.get(bytes)
                     buffer.position(pos) // Restore position for other readers
                     
-                    val space = 1048576 - payloadStream.size()
+                    val space = 3145728 - payloadStream.size()
                     val toWrite = kotlin.math.min(remaining, space)
                     payloadStream.write(bytes, 0, toWrite)
                 }

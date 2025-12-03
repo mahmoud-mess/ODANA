@@ -27,18 +27,8 @@ class NioProxy(private val vpnWriter: (ByteBuffer) -> Unit) : Runnable {
     // TCP Map
     private val tcpSessionMap = ConcurrentHashMap<String, TcpSession>()
     
-    // Reverse mapping: Channel -> FlowKey
+    // Reverse mapping: Channel -> FlowKey (needed when we receive data from internet)
     private val channelKeyMap = ConcurrentHashMap<AbstractSelectableChannel, FlowKey>()
-
-    data class FlowKey(
-        val sourceIp: String,
-        val sourcePort: Int,
-        val destIp: String,
-        val destPort: Int,
-        val protocol: Int
-    ) {
-        override fun toString(): String = "$sourceIp:$sourcePort|$destIp:$destPort|$protocol"
-    }
 
     @Volatile
     private var isRunning = true

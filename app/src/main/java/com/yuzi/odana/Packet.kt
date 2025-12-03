@@ -11,6 +11,8 @@ class Packet(val buffer: ByteBuffer) {
     var protocol: Int = 0
     var sourceIp: String = ""
     var destIp: String = ""
+    
+    fun getSrcIp() = sourceIp
     var headerLength: Int = 0
     var totalLength: Int = 0
 

@@ -298,72 +298,79 @@ fun FlowDetailScreen(flow: FlowEntity, onBack: () -> Unit) {
         }
     ) { innerPadding ->
         SelectionContainer {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp)
+                    .padding(innerPadding),
+                contentPadding = PaddingValues(16.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AppIcon(flow.appName, Modifier.size(48.dp))
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text(
-                            text = flow.appName ?: "Unknown", 
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (isBlocked) {
-                            Text("BLOCKED", color = Color.Red, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Target: ${flow.remoteIp}:${flow.remotePort}", style = MaterialTheme.typography.bodyLarge)
-                Text("Protocol: ${if (flow.protocol == 6) "TCP" else "UDP"}", style = MaterialTheme.typography.bodyLarge)
-                Text("Time: ${formatTime(flow.timestamp)}", style = MaterialTheme.typography.bodyLarge)
-                Text("Duration: ${flow.durationMs} ms", style = MaterialTheme.typography.bodyLarge)
-                Text("Stats: ${flow.packets} pkts, ${flow.bytes} bytes", style = MaterialTheme.typography.bodyLarge)
-                
-                if (!flow.sni.isNullOrEmpty()) {
-                    Text("SNI: ${flow.sni}", style = MaterialTheme.typography.bodyLarge)
-                }
-                
-                Spacer(modifier = Modifier.height(24.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                Text("Payload Capture (Max 1MB):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                if (flow.payloadHex.isNullOrEmpty()) {
-                    Text("No Payload Captured", color = Color.Gray)
-                } else {
-                    TabRow(selectedTabIndex = selectedTab) {
-                        tabs.forEachIndexed { index, title ->
-                            Tab(
-                                selected = selectedTab == index,
-                                onClick = { selectedTab = index },
-                                text = { Text(title) }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AppIcon(flow.appName, Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = flow.appName ?: "Unknown", 
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold
                             )
+                            if (isBlocked) {
+                                Text("BLOCKED", color = Color.Red, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                     
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Target: ${flow.remoteIp}:${flow.remotePort}", style = MaterialTheme.typography.bodyLarge)
+                    Text("Protocol: ${if (flow.protocol == 6) "TCP" else "UDP"}", style = MaterialTheme.typography.bodyLarge)
+                    Text("Time: ${formatTime(flow.timestamp)}", style = MaterialTheme.typography.bodyLarge)
+                    Text("Duration: ${flow.durationMs} ms", style = MaterialTheme.typography.bodyLarge)
+                    Text("Stats: ${flow.packets} pkts, ${flow.bytes} bytes", style = MaterialTheme.typography.bodyLarge)
+                    
+                    if (!flow.sni.isNullOrEmpty()) {
+                        Text("SNI: ${flow.sni}", style = MaterialTheme.typography.bodyLarge)
+                    }
+                    
+                    Spacer(modifier = Modifier.height(24.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Text("Payload Capture (Max 3MB):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                if (flow.payloadHex.isNullOrEmpty()) {
+                    item {
+                        Text("No Payload Captured", color = Color.Gray)
+                    }
+                } else {
+                    item {
+                        TabRow(selectedTabIndex = selectedTab) {
+                            tabs.forEachIndexed { index, title ->
+                                Tab(
+                                    selected = selectedTab == index,
+                                    onClick = { selectedTab = index },
+                                    text = { Text(title) }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                     
                     val displayText = if (selectedTab == 0) flow.payloadHex else flow.payloadText
+                    val lines = displayText?.split("\n") ?: emptyList()
                     
-                    Text(
-                        text = displayText ?: "",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(8.dp)
-                    )
+                    items(lines) { line ->
+                        Text(
+                            text = line,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 8.dp) // remove vertical padding for tight lines
+                        )
+                    }
                 }
             }
         }

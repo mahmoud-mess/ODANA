@@ -65,11 +65,11 @@ object FlowManager {
 
     fun getFlow(packet: Packet): Flow {
         val key = FlowKey(
-            packet.protocol,
             packet.sourceIp,
             packet.sourcePort,
             packet.destIp,
-            packet.destPort
+            packet.destPort,
+            packet.protocol
         )
         
         return activeFlows.computeIfAbsent(key) { 
@@ -217,8 +217,8 @@ object FlowManager {
                     timestamp = flow.startTime,
                     appUid = flow.appUid,
                     appName = flow.appName,
-                    remoteIp = flow.key.dstIp,
-                    remotePort = flow.key.dstPort,
+                    remoteIp = flow.key.destIp,
+                    remotePort = flow.key.destPort,
                     protocol = flow.key.protocol,
                     bytes = flow.bytes,
                     packets = flow.packets,
