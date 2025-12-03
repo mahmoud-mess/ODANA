@@ -209,6 +209,8 @@ fun MainTabScreen(
         }
     }
 
+    val anomalyCount by FlowManager.anomalyCount.collectAsState()
+    
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -216,7 +218,8 @@ fun MainTabScreen(
                 ModernNavigationBar(
                     selectedTab = selectedTab,
                     onTabSelected = { selectedTab = it },
-                    activeConnections = uiState.activeFlowsCount
+                    activeConnections = uiState.activeFlowsCount,
+                    alertCount = anomalyCount
                 )
             }
         ) { innerPadding ->
@@ -236,7 +239,8 @@ fun MainTabScreen(
                         },
                         onFlowClick = { viewModel.onFlowSelected(it) }
                     )
-                    2 -> StatsScreen(
+                    2 -> AlertsScreen(viewModel = viewModel)
+                    3 -> StatsScreen(
                         viewModel = viewModel,
                         onExportJson = onExportJson,
                         onExportCsv = onExportCsv
@@ -295,11 +299,13 @@ private fun FlushingOverlay() {
 private fun ModernNavigationBar(
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
-    activeConnections: Int
+    activeConnections: Int,
+    alertCount: Int = 0
 ) {
     val items = listOf(
         NavItem(Icons.Outlined.Dashboard, Icons.Filled.Dashboard, "Home"),
         NavItem(Icons.Outlined.Sensors, Icons.Filled.Sensors, "Monitor"),
+        NavItem(Icons.Outlined.Shield, Icons.Filled.Shield, "Alerts"),
         NavItem(Icons.Outlined.PieChart, Icons.Filled.PieChart, "Stats")
     )
     
@@ -311,17 +317,28 @@ private fun ModernNavigationBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
                 .navigationBarsPadding(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             items.forEachIndexed { index, item ->
+                val badge = when (index) {
+                    1 -> if (activeConnections > 0) activeConnections else null
+                    2 -> if (alertCount > 0) alertCount else null
+                    else -> null
+                }
+                val badgeColor = when (index) {
+                    2 -> ErrorRed  // Alerts tab uses red badge
+                    else -> CyberPink
+                }
+                
                 ModernNavItem(
                     item = item,
                     selected = selectedTab == index,
                     onClick = { onTabSelected(index) },
-                    badge = if (index == 1 && activeConnections > 0) activeConnections else null
+                    badge = badge,
+                    badgeColor = badgeColor
                 )
             }
         }
@@ -339,7 +356,8 @@ private fun ModernNavItem(
     item: NavItem,
     selected: Boolean,
     onClick: () -> Unit,
-    badge: Int? = null
+    badge: Int? = null,
+    badgeColor: Color = CyberPink
 ) {
     val animatedAlpha by animateFloatAsState(
         targetValue = if (selected) 1f else 0.6f,
@@ -355,12 +373,12 @@ private fun ModernNavItem(
                 if (selected) Wisteria500.copy(alpha = 0.15f)
                 else Color.Transparent
             )
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box {
                 Icon(
@@ -368,7 +386,7 @@ private fun ModernNavItem(
                     contentDescription = item.label,
                     tint = if (selected) Wisteria400 
                            else MaterialTheme.colorScheme.onSurface.copy(alpha = animatedAlpha),
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(22.dp)
                 )
                 
                 // Badge
@@ -379,7 +397,7 @@ private fun ModernNavItem(
                             .offset(x = 6.dp, y = (-4).dp)
                             .size(16.dp)
                             .clip(CircleShape)
-                            .background(CyberPink),
+                            .background(badgeColor),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(

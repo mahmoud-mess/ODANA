@@ -9,6 +9,9 @@ import androidx.room.Room
 import com.yuzi.odana.data.AppDatabase
 import com.yuzi.odana.data.FlowEntity
 import com.yuzi.odana.data.FlowFeatures
+import com.yuzi.odana.ml.AnomalyDetector
+import com.yuzi.odana.ml.AnomalyResult
+import com.yuzi.odana.ml.AnomalySeverity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -30,6 +33,7 @@ object FlowManager {
     private const val BATCH_SIZE = 20              // Smaller batches = more frequent, lighter writes
     private const val STALE_TIMEOUT_MS = 15000L    // 15 seconds idle = stale
     private const val RETENTION_DAYS = 14          // Keep detailed flows for 14 days
+    private const val MAX_RECENT_ANOMALIES = 50    // Keep last N anomalies for UI
     
     private var connectivityManager: ConnectivityManager? = null
     private var packageManager: PackageManager? = null
@@ -44,6 +48,21 @@ object FlowManager {
     private val _activeFlowsState = MutableStateFlow<List<Flow>>(emptyList())
     val activeFlowsState: StateFlow<List<Flow>> = _activeFlowsState
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ML: Anomaly Detection State
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    /** Recent anomalies detected (for UI alerts) */
+    private val _recentAnomalies = MutableStateFlow<List<AnomalyResult>>(emptyList())
+    val recentAnomalies: StateFlow<List<AnomalyResult>> = _recentAnomalies
+    
+    /** Count of anomalies detected this session */
+    private val _anomalyCount = MutableStateFlow(0)
+    val anomalyCount: StateFlow<Int> = _anomalyCount
+    
+    /** Is ML analysis enabled? */
+    var mlEnabled = true
+    
     fun initialize(context: Context) {
         if (db != null) return // Already initialized
         
@@ -57,6 +76,20 @@ object FlowManager {
         .fallbackToDestructiveMigration()
         .build()
         
+        // Initialize ML Anomaly Detector
+        managerScope.launch(Dispatchers.IO) {
+            try {
+                AnomalyDetector.initialize(db!!.profileDao())
+                Log.i(TAG, "Anomaly Detector initialized")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize Anomaly Detector", e)
+            }
+        }
+        
+        // Initialize Anomaly Notifier
+        AnomalyNotifier.initialize(context)
+        AnomalyNotifier.resetSession()
+        
         // Start periodic UI update loop (Throttle: 500ms)
         managerScope.launch {
             while (true) {
@@ -69,6 +102,16 @@ object FlowManager {
                     }
                 }
                 delay(500)
+            }
+        }
+        
+        // Periodic profile persistence (every 30 seconds)
+        managerScope.launch {
+            while (true) {
+                delay(30000)
+                if (AnomalyDetector.isInitialized) {
+                    AnomalyDetector.flushProfiles()
+                }
             }
         }
     }
@@ -246,6 +289,11 @@ object FlowManager {
             // Also run retention cleanup while we're at it
             cleanupOldFlows()
             
+            // Persist ML profiles
+            if (AnomalyDetector.isInitialized) {
+                AnomalyDetector.flushProfiles()
+            }
+            
         } finally {
             _isFlushing.value = false
             Log.i(TAG, "Flush complete")
@@ -256,6 +304,7 @@ object FlowManager {
         withContext(NonCancellable + Dispatchers.IO) {
             val entities = mutableListOf<FlowEntity>()
             val features = mutableListOf<FlowFeatures>()
+            val anomalies = mutableListOf<AnomalyResult>()
             
             flows.forEach { flow ->
                 // Create flow entity for history
@@ -282,6 +331,22 @@ object FlowManager {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to extract features for flow", e)
                 }
+                
+                // Run anomaly analysis (also updates profiles)
+                if (mlEnabled && AnomalyDetector.isInitialized) {
+                    try {
+                        val result = AnomalyDetector.analyzeFlow(flow)
+                        if (result.isAnomalous) {
+                            anomalies.add(result)
+                            Log.w(TAG, "ANOMALY: ${result.summary()}")
+                            
+                            // Show notification for high-severity anomalies
+                            AnomalyNotifier.notifyIfNeeded(result)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to analyze flow", e)
+                    }
+                }
             }
             
             // Batch insert entities
@@ -301,6 +366,44 @@ object FlowManager {
             } catch (e: Exception) {
                 Log.e(TAG, "Error saving flow features", e)
             }
+            
+            // Update anomaly state for UI
+            if (anomalies.isNotEmpty()) {
+                val currentAnomalies = _recentAnomalies.value.toMutableList()
+                currentAnomalies.addAll(0, anomalies)
+                
+                // Keep only recent anomalies
+                if (currentAnomalies.size > MAX_RECENT_ANOMALIES) {
+                    _recentAnomalies.value = currentAnomalies.take(MAX_RECENT_ANOMALIES)
+                } else {
+                    _recentAnomalies.value = currentAnomalies
+                }
+                
+                _anomalyCount.value += anomalies.size
+            }
         }
+    }
+    
+    /**
+     * Clear all detected anomalies (user dismissed them).
+     */
+    fun clearAnomalies() {
+        _recentAnomalies.value = emptyList()
+        _anomalyCount.value = 0
+    }
+    
+    /**
+     * Get current ML profile stats for debugging.
+     */
+    fun getProfileStats(): String {
+        if (!AnomalyDetector.isInitialized) return "ML not initialized"
+        
+        val profiles = AnomalyDetector.getAllProfiles()
+        val mature = profiles.count { it.maturityLevel >= 2 }
+        val learning = profiles.count { it.maturityLevel == 1 }
+        val infant = profiles.count { it.maturityLevel == 0 }
+        val totalFlows = profiles.sumOf { it.flowCount }
+        
+        return "Profiles: ${profiles.size} (Mature: $mature, Learning: $learning, New: $infant) | Flows learned: $totalFlows"
     }
 }
