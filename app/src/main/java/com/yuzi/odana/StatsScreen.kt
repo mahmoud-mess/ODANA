@@ -1,104 +1,71 @@
 package com.yuzi.odana
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.yuzi.odana.data.AppUsage
-import com.yuzi.odana.ui.components.ChartData
-import com.yuzi.odana.ui.components.DonutChart
+import com.yuzi.odana.ui.components.*
 import com.yuzi.odana.ui.formatBytes
+import com.yuzi.odana.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen(viewModel: MainViewModel) {
     val stats: List<AppUsage> by viewModel.appUsageStats.collectAsState()
     
-    // Calculate max for progress bar scaling
     val maxBytes = remember(stats) {
         stats.maxOfOrNull { it.totalBytes } ?: 1L
     }
     
-    // Prepare Chart Data
-    val chartColors = remember {
-        listOf(
-            Color(0xFF00BCD4), // Cyan
-            Color(0xFFE91E63), // Pink
-            Color(0xFF4CAF50), // Green
-            Color(0xFFFF9800), // Orange
-            Color(0xFF9C27B0),  // Purple
-            Color(0xFF607D8B), // Blue Grey
-            Color(0xFF795548), // Brown
-            Color(0xFFFDD835), // Yellow
-            Color(0xFFD32F2F), // Red
-            Color(0xFF00ACC1) // Light Cyan
-        )
-    }
-    
+    // Prepare Chart Data with wisteria palette
     val (chartSectors, colorMap) = remember(stats) {
-        val result: Pair<List<ChartData>, Map<String, Color>> =
-            if (stats.sumOf { it.totalBytes } == 0L) {
-                Pair(emptyList(), emptyMap())
-            } else {
-                val colorMapInternal = mutableMapOf<String, Color>()
-                stats.forEachIndexed { index, app ->
-                    val appName = app.appName ?: "Unknown"
-                    colorMapInternal[appName] = chartColors.getOrElse(index) { Color.Gray }
-                }
-
-                val top5 = stats.take(5)
-                val othersBytes = stats.drop(5).sumOf { it.totalBytes }
-
-                val chartSectorsInternal = top5.map { app ->
-                    ChartData(
-                        value = app.totalBytes.toFloat(),
-                        color = colorMapInternal[app.appName] ?: Color.Gray,
-                        label = app.appName ?: "Unknown"
-                    )
-                }.toMutableList()
-
-                if (othersBytes > 0) {
-                    chartSectorsInternal.add(
-                        ChartData(
-                            value = othersBytes.toFloat(),
-                            color = Color.LightGray,
-                            label = "Others"
-                        )
-                    )
-                }
-
-                Pair(chartSectorsInternal, colorMapInternal)
+        if (stats.sumOf { it.totalBytes } == 0L) {
+            Pair(emptyList<ChartData>(), emptyMap<String, Color>())
+        } else {
+            val colorMapInternal = mutableMapOf<String, Color>()
+            stats.forEachIndexed { index, app ->
+                val appName = app.appName ?: "Unknown"
+                colorMapInternal[appName] = ChartPalette.getOrElse(index) { Wisteria400 }
             }
 
-        result
+            val top5 = stats.take(5)
+            val othersBytes = stats.drop(5).sumOf { it.totalBytes }
+
+            val chartSectorsInternal = top5.map { app ->
+                ChartData(
+                    value = app.totalBytes.toFloat(),
+                    color = colorMapInternal[app.appName] ?: Wisteria400,
+                    label = app.appName ?: "Unknown"
+                )
+            }.toMutableList()
+
+            if (othersBytes > 0) {
+                chartSectorsInternal.add(
+                    ChartData(
+                        value = othersBytes.toFloat(),
+                        color = Wisteria700.copy(alpha = 0.5f),
+                        label = "Others"
+                    )
+                )
+            }
+
+            Pair(chartSectorsInternal.toList(), colorMapInternal.toMap())
+        }
     }
     
     val totalString = remember(stats) {
@@ -106,44 +73,148 @@ fun StatsScreen(viewModel: MainViewModel) {
         formatBytes(total)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Data Usage") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            )
-        }
-    ) { innerPadding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
         if (stats.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(innerPadding), contentAlignment = Alignment.Center) {
-                Text("No data usage recorded yet.", color = Color.Gray)
+            // Empty state
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.PieChart,
+                        contentDescription = null,
+                        tint = Wisteria400.copy(alpha = 0.4f),
+                        modifier = Modifier.size(80.dp)
+                    )
+                    Text(
+                        text = "No Usage Data Yet",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "Start monitoring to collect statistics",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                    )
+                }
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Header
                 item {
-                    DonutChart(
-                        data = chartSectors, // Use chartSectors
-                        centerText = totalString,
-                        modifier = Modifier.height(300.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Top Applications",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        text = "Data Usage",
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Breakdown by application",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
                 }
                 
-                items(stats) { item ->
-                    AppUsageItem(item, maxBytes, colorMap[item.appName] ?: Color.Gray) // Use colorMap
+                // Donut Chart Card
+                item {
+                    GradientGlassCard(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            DonutChart(
+                                data = chartSectors,
+                                centerText = totalString,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(280.dp),
+                                strokeWidth = 40f,
+                                showGlow = true
+                            )
+                            
+                            Spacer(modifier = Modifier.height(20.dp))
+                            
+                            // Legend row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                chartSectors.take(3).forEach { data ->
+                                    ChartLegendItem(
+                                        color = data.color,
+                                        label = data.label.take(10)
+                                    )
+                                }
+                            }
+                            
+                            if (chartSectors.size > 3) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    chartSectors.drop(3).forEach { data ->
+                                        ChartLegendItem(
+                                            color = data.color,
+                                            label = data.label.take(10)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Section header
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "All Applications",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "${stats.size} apps",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+                
+                // App list
+                itemsIndexed(stats) { index, item ->
+                    AppUsageCard(
+                        item = item,
+                        maxBytes = maxBytes,
+                        color = colorMap[item.appName] ?: ChartPalette.getOrElse(index) { Wisteria400 },
+                        rank = index + 1
+                    )
+                }
+                
+                // Bottom spacer
+                item {
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
         }
@@ -151,44 +222,112 @@ fun StatsScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-fun AppUsageItem(item: AppUsage, maxBytes: Long, chartColor: Color) {
-    val percentage = if (maxBytes > 0) item.totalBytes.toFloat() / maxBytes.toFloat() else 0f
-    
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Color indicator for chart legend
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .background(chartColor, CircleShape)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                AppIcon(item.appName, Modifier.size(32.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = item.appName ?: "Unknown",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-            Text(
-                text = formatBytes(item.totalBytes),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        LinearProgressIndicator(
-            progress = { percentage },
-            modifier = Modifier.fillMaxWidth().height(8.dp),
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            color = chartColor // Use chart color for the progress indicator
+private fun ChartLegendItem(
+    color: Color,
+    label: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
         )
     }
 }
 
+@Composable
+private fun AppUsageCard(
+    item: AppUsage,
+    maxBytes: Long,
+    color: Color,
+    rank: Int
+) {
+    val progress = item.totalBytes.toFloat() / maxBytes.toFloat()
+    
+    GlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = 16.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // App icon placeholder with rank
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(color.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                // Try to show app icon, fallback to rank
+                AppIcon(
+                    packageName = item.appName,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+            
+            // Info section
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = item.appName ?: "Unknown",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
+                    Text(
+                        text = formatBytes(item.totalBytes),
+                        style = MonoMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = color
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Progress bar with percentage
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GradientProgressBar(
+                        progress = progress,
+                        colors = listOf(color, color.copy(alpha = 0.5f)),
+                        height = 6,
+                        modifier = Modifier.weight(1f)
+                    )
+                    
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                }
+            }
+        }
+    }
+}

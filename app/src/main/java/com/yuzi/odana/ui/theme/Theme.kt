@@ -1,69 +1,142 @@
 package com.yuzi.odana.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
-private val DarkColorScheme = darkColorScheme(
-    primary = OceanBlue,
-    onPrimary = NeutralWhite,
-    primaryContainer = OceanBlueDark,
-    onPrimaryContainer = NeutralWhite,
+// ═══════════════════════════════════════════════════════════════════════════════
+// WISTERIA DARK THEME - Primary Experience
+// Deep, rich, cyberpunk vibes with purple accents
+// ═══════════════════════════════════════════════════════════════════════════════
+private val WisteriaDarkScheme = darkColorScheme(
+    // Primary - The main wisteria purple
+    primary = Wisteria400,
+    onPrimary = Color.White,
+    primaryContainer = Wisteria800,
+    onPrimaryContainer = Wisteria100,
     
-    secondary = SlateGray,
-    onSecondary = NeutralWhite,
+    // Secondary - Complementary accent
+    secondary = CyberMint,
+    onSecondary = Color.Black,
+    secondaryContainer = Color(0xFF0D3D35),
+    onSecondaryContainer = CyberMint,
     
-    tertiary = CoralPink,
-    onTertiary = NeutralWhite,
+    // Tertiary - Hot accent for highlights
+    tertiary = CyberPink,
+    onTertiary = Color.Black,
+    tertiaryContainer = Color(0xFF4A1942),
+    onTertiaryContainer = CyberPink,
     
-    background = NeutralGrey900,
-    surface = NeutralGrey800,
-    onSurface = NeutralGrey100,
+    // Background - Deep abyss
+    background = VioletAbyss,
+    onBackground = TextPrimaryDark,
     
-    surfaceVariant = SlateGrayDark,
-    onSurfaceVariant = NeutralGrey100,
+    // Surface - Elevated cards
+    surface = SurfaceDark,
+    onSurface = TextPrimaryDark,
+    surfaceVariant = SurfaceDarkVariant,
+    onSurfaceVariant = TextSecondaryDark,
+    surfaceTint = Wisteria400,
     
-    error = ErrorRed
+    // Inverse
+    inverseSurface = Wisteria100,
+    inverseOnSurface = Wisteria900,
+    inversePrimary = Wisteria700,
+    
+    // Outline
+    outline = Wisteria700,
+    outlineVariant = SurfaceDarkVariant,
+    
+    // Semantic
+    error = ErrorRed,
+    onError = Color.White,
+    errorContainer = Color(0xFF3D0D0D),
+    onErrorContainer = Color(0xFFFFB4AB),
+    
+    // Scrim
+    scrim = Color.Black.copy(alpha = 0.7f)
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = OceanBlue,
-    onPrimary = NeutralWhite,
-    primaryContainer = OceanBlueLight,
-    onPrimaryContainer = SlateGrayDark,
+// ═══════════════════════════════════════════════════════════════════════════════
+// WISTERIA LIGHT THEME - Soft lavender aesthetic
+// ═══════════════════════════════════════════════════════════════════════════════
+private val WisteriaLightScheme = lightColorScheme(
+    // Primary
+    primary = Wisteria600,
+    onPrimary = Color.White,
+    primaryContainer = Wisteria100,
+    onPrimaryContainer = Wisteria900,
     
-    secondary = SlateGray,
-    onSecondary = NeutralWhite,
+    // Secondary
+    secondary = Color(0xFF0D9488),  // Teal-600
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFCCFBF1),
+    onSecondaryContainer = Color(0xFF134E4A),
     
-    tertiary = CoralPink,
-    onTertiary = NeutralWhite,
+    // Tertiary
+    tertiary = Color(0xFFDB2777),  // Pink-600
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFFCE7F3),
+    onTertiaryContainer = Color(0xFF831843),
     
-    background = NeutralGrey50,
-    surface = NeutralWhite,
-    onSurface = SlateGrayDark,
+    // Background
+    background = SurfaceLight,
+    onBackground = TextPrimaryLight,
     
-    surfaceVariant = NeutralGrey100,
-    onSurfaceVariant = SlateGrayDark,
+    // Surface
+    surface = Color.White,
+    onSurface = TextPrimaryLight,
+    surfaceVariant = SurfaceLightVariant,
+    onSurfaceVariant = TextSecondaryLight,
+    surfaceTint = Wisteria600,
     
-    error = ErrorRed
+    // Inverse
+    inverseSurface = Wisteria900,
+    inverseOnSurface = Wisteria100,
+    inversePrimary = Wisteria300,
+    
+    // Outline
+    outline = Wisteria300,
+    outlineVariant = Wisteria100,
+    
+    // Semantic
+    error = ErrorRed,
+    onError = Color.White,
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF410002),
+    
+    // Scrim
+    scrim = Color.Black.copy(alpha = 0.4f)
 )
 
 @Composable
 fun ODANATheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Disable dynamic color for consistent branding
-    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val colorScheme = if (darkTheme) WisteriaDarkScheme else WisteriaLightScheme
+    
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            // Make status bar transparent for edge-to-edge
+            window.statusBarColor = Color.Transparent.toArgb()
+            window.navigationBarColor = Color.Transparent.toArgb()
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
 
     MaterialTheme(
         colorScheme = colorScheme,
