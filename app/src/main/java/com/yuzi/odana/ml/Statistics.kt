@@ -359,6 +359,10 @@ class HourlyHistogram {
     var total: Int = 0
         private set
     
+    /** Public access to hourly counts for visualization */
+    val hours: List<Int>
+        get() = counts.toList()
+    
     fun increment(hour: Int) {
         require(hour in 0..23) { "Hour must be 0-23" }
         counts[hour]++

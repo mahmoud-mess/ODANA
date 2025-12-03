@@ -1,5 +1,6 @@
 package com.yuzi.odana.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -25,12 +26,30 @@ import androidx.compose.ui.unit.sp
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // NETWORK PULSE - Central pulsing visualization showing activity
+// Color changes based on alert severity (null = normal wisteria)
 // ═══════════════════════════════════════════════════════════════════════════════
 @Composable
 fun NetworkPulse(
     activeConnections: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    alertColor: Color? = null  // null = normal, red = HIGH, orange = MEDIUM
 ) {
+    // Animated color transition for smooth severity changes
+    val pulseColor by animateColorAsState(
+        targetValue = alertColor ?: Wisteria400,
+        animationSpec = tween(500),
+        label = "pulseColor"
+    )
+    val coreColorLight by animateColorAsState(
+        targetValue = alertColor?.copy(alpha = 0.8f) ?: Wisteria300,
+        animationSpec = tween(500),
+        label = "coreLight"
+    )
+    val coreColorDark by animateColorAsState(
+        targetValue = alertColor ?: Wisteria500,
+        animationSpec = tween(500),
+        label = "coreDark"
+    )
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     
     // Multiple pulse waves for layered effect
@@ -85,7 +104,7 @@ fun NetworkPulse(
             val center = Offset(size.width / 2, size.height / 2)
             val maxRadius = size.minDimension / 2
             
-            // Pulse rings
+            // Pulse rings - color based on alert severity
             listOf(pulse1, pulse2, pulse3).forEachIndexed { index, pulse ->
                 val radius = maxRadius * 0.3f + (maxRadius * 0.7f * pulse)
                 val alpha = (1f - pulse) * 0.5f * activityMultiplier
@@ -93,8 +112,8 @@ fun NetworkPulse(
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            Wisteria400.copy(alpha = alpha),
-                            Wisteria400.copy(alpha = 0f)
+                            pulseColor.copy(alpha = alpha),
+                            pulseColor.copy(alpha = 0f)
                         ),
                         center = center,
                         radius = radius
@@ -111,8 +130,8 @@ fun NetworkPulse(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Wisteria400.copy(alpha = coreGlow * 0.6f),
-                        Wisteria400.copy(alpha = 0f)
+                        pulseColor.copy(alpha = coreGlow * 0.6f),
+                        pulseColor.copy(alpha = 0f)
                     ),
                     center = center,
                     radius = coreRadius * 2.5f
@@ -121,12 +140,12 @@ fun NetworkPulse(
                 center = center
             )
             
-            // Core solid
+            // Core solid - uses animated core colors
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Wisteria300,
-                        Wisteria500
+                        coreColorLight,
+                        coreColorDark
                     ),
                     center = center,
                     radius = coreRadius

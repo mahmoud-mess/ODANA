@@ -33,7 +33,7 @@ object AnomalyNotifier {
     
     // Configuration
     var isEnabled = true
-    var minSeverity = AnomalySeverity.HIGH  // Only notify for HIGH by default
+    var minSeverity = AnomalySeverity.MEDIUM  // Notify for MEDIUM and HIGH (flood + scan)
     
     // Rate limiting - don't spam notifications
     private var lastNotificationTime = 0L

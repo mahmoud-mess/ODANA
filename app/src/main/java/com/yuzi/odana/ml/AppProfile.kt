@@ -349,6 +349,17 @@ data class AppProfile(
     /** Get Z-score for this duration */
     fun durationZScore(durationMs: Long): Double = durationStats.zScore(durationMs.toDouble())
     
+    /** Estimated number of unique destinations (from bloom filter counter) */
+    fun estimatedUniqueDestinations(): Int = uniqueDestinationCount
+    
+    /** Get top N most used ports */
+    fun topPorts(n: Int = 3): List<Int> {
+        return portFrequency.entries
+            .sortedByDescending { it.value }
+            .take(n)
+            .map { it.key }
+    }
+    
     // ═══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════════════

@@ -1,15 +1,19 @@
 package com.yuzi.odana
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.yuzi.odana.data.CleanupWorker
 import com.yuzi.odana.data.ExportManager
 import kotlinx.coroutines.CoroutineScope
@@ -75,6 +79,17 @@ class MainActivity : ComponentActivity() {
     ) { uri: Uri? ->
         uri?.let { handleExportUri(it) }
     }
+    
+    // Notification permission launcher (Android 13+)
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            android.util.Log.i("MainActivity", "Notification permission granted")
+        } else {
+            android.util.Log.w("MainActivity", "Notification permission denied - alerts won't show notifications")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,6 +100,9 @@ class MainActivity : ComponentActivity() {
         
         // Schedule daily cleanup worker
         CleanupWorker.schedule(this)
+        
+        // Request notification permission on Android 13+
+        requestNotificationPermission()
 
         setContent {
             ODANATheme {
@@ -132,6 +150,26 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            when {
+                ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED -> {
+                    // Already granted
+                }
+                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
+                    // Could show a rationale dialog here, but for now just request
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                else -> {
+                    // Request permission
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        }
+    }
+    
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -175,14 +213,28 @@ fun AppNavigation(
     onExportCsv: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var showProfiles by remember { mutableStateOf(false) }
     
-    if (uiState.selectedFlow != null) {
-        FlowDetailScreen(
-            flow = uiState.selectedFlow!!,
-            onBack = { viewModel.onFlowDeselected() }
-        )
-    } else {
-        MainTabScreen(viewModel, onStartVpn, onStopVpn, onExportJson, onExportCsv)
+    when {
+        showProfiles -> {
+            ProfilesScreen(onBack = { showProfiles = false })
+        }
+        uiState.selectedFlow != null -> {
+            FlowDetailScreen(
+                flow = uiState.selectedFlow!!,
+                onBack = { viewModel.onFlowDeselected() }
+            )
+        }
+        else -> {
+            MainTabScreen(
+                viewModel = viewModel,
+                onStartVpn = onStartVpn,
+                onStopVpn = onStopVpn,
+                onExportJson = onExportJson,
+                onExportCsv = onExportCsv,
+                onViewProfiles = { showProfiles = true }
+            )
+        }
     }
 }
 
@@ -192,7 +244,8 @@ fun MainTabScreen(
     onStartVpn: () -> Unit,
     onStopVpn: () -> Unit,
     onExportJson: () -> Unit,
-    onExportCsv: () -> Unit
+    onExportCsv: () -> Unit,
+    onViewProfiles: () -> Unit = {}
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val uiState by viewModel.uiState.collectAsState()
@@ -239,7 +292,10 @@ fun MainTabScreen(
                         },
                         onFlowClick = { viewModel.onFlowSelected(it) }
                     )
-                    2 -> AlertsScreen(viewModel = viewModel)
+                    2 -> AlertsScreen(
+                        viewModel = viewModel,
+                        onViewProfiles = onViewProfiles
+                    )
                     3 -> StatsScreen(
                         viewModel = viewModel,
                         onExportJson = onExportJson,
@@ -439,6 +495,7 @@ fun MonitorScreen(
     onFlowClick: (FlowSummary) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isUnderFlood by FlowManager.isUnderFlood.collectAsState()
     var showSearch by remember { mutableStateOf(false) }
 
     Box(
@@ -447,6 +504,35 @@ fun MonitorScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // Flood Warning Banner
+            AnimatedVisibility(
+                visible = isUnderFlood,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(WarningAmber.copy(alpha = 0.15f))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Warning,
+                        contentDescription = null,
+                        tint = WarningAmber,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "High traffic detected — sampling mode active",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = WarningAmber,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+            
             // Header
             Column(
                 modifier = Modifier

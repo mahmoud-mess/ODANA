@@ -35,6 +35,23 @@ object FlowManager {
     private const val RETENTION_DAYS = 14          // Keep detailed flows for 14 days
     private const val MAX_RECENT_ANOMALIES = 50    // Keep last N anomalies for UI
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FLOOD PROTECTION - Prevent DoS from port scans / traffic floods
+    // ═══════════════════════════════════════════════════════════════════════════
+    private const val MAX_ACTIVE_FLOWS = 500           // Global limit on active flows
+    private const val MAX_FLOWS_PER_APP = 100          // Per-app limit (port scan detection)
+    private const val FLOOD_THRESHOLD_PER_SECOND = 400  // Packets/sec that triggers flood mode
+    private const val FLOOD_SAMPLE_RATE = 10           // In flood mode, process every Nth packet
+    
+    private var isFloodMode = false
+    private var packetCounter = 0L
+    private var lastPacketCountTime = System.currentTimeMillis()
+    private var packetsDropped = 0L
+    private val appFlowCounts = ConcurrentHashMap<Int, Int>()  // UID -> active flow count
+    private val portScanAlertedApps = mutableSetOf<Int>()      // Apps already alerted for scanning
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    
     private var connectivityManager: ConnectivityManager? = null
     private var packageManager: PackageManager? = null
     var db: AppDatabase? = null
@@ -42,6 +59,10 @@ object FlowManager {
     // Track if we're currently flushing to show UI indicator
     private val _isFlushing = MutableStateFlow(false)
     val isFlushing: StateFlow<Boolean> = _isFlushing
+    
+    // Flood detection state for UI
+    private val _isUnderFlood = MutableStateFlow(false)
+    val isUnderFlood: StateFlow<Boolean> = _isUnderFlood
 
     // Live Flow State
     private val managerScope = CoroutineScope(Dispatchers.Default)
@@ -116,7 +137,7 @@ object FlowManager {
         }
     }
 
-    fun getFlow(packet: Packet): Flow {
+    fun getFlow(packet: Packet): Flow? {
         val key = FlowKey(
             packet.sourceIp,
             packet.sourcePort,
@@ -125,15 +146,82 @@ object FlowManager {
             packet.protocol
         )
         
-        return activeFlows.computeIfAbsent(key) { 
-            val flow = Flow(key)
-            resolveAppUid(flow, packet)
-            // Filter out our own traffic from logs to prevent flooding
-            if (flow.appName != "com.yuzi.odana") {
-                Log.i(TAG, "New Flow: $key [App: ${flow.appName}]")
+        // Check if flow already exists (fast path)
+        activeFlows[key]?.let { return it }
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // FLOOD PROTECTION CHECKS (for new flows only)
+        // ═══════════════════════════════════════════════════════════════════════
+        
+        // Global limit - prevent memory exhaustion
+        if (activeFlows.size >= MAX_ACTIVE_FLOWS) {
+            packetsDropped++
+            if (packetsDropped % 100 == 0L) {
+                Log.w(TAG, "Flood protection: Dropped $packetsDropped packets (max flows reached)")
             }
-            flow
+            return null
         }
+        
+        // Create and setup new flow
+        val flow = Flow(key)
+        resolveAppUid(flow, packet)
+        
+        // Per-app limit - detect port scanning
+        flow.appUid?.let { uid ->
+            val currentCount = appFlowCounts.getOrDefault(uid, 0)
+            if (currentCount >= MAX_FLOWS_PER_APP) {
+                // This app is creating too many flows - likely scanning
+                packetsDropped++
+                
+                // Only alert once per app per flood event
+                if (!portScanAlertedApps.contains(uid)) {
+                    portScanAlertedApps.add(uid)
+                    Log.w(TAG, "App ${flow.appName} (UID:$uid) exceeds flow limit - possible port scan!")
+                    
+                    // Create port scan anomaly
+                    val scanAnomaly = AnomalyResult(
+                        score = 0.95f,
+                        severity = AnomalySeverity.HIGH,
+                        reasons = listOf(
+                            "Port scanning detected: ${MAX_FLOWS_PER_APP}+ simultaneous connections",
+                            "Rapid connection attempts to multiple ports",
+                            "This behavior may indicate network reconnaissance"
+                        ),
+                        breakdown = com.yuzi.odana.ml.ScoreBreakdown(
+                            temporal = 0.3f,
+                            volume = 0.5f,
+                            destination = 1.0f
+                        ),
+                        appUid = uid,
+                        appName = flow.appName,
+                        flowKey = "Multiple ports (scan)",
+                        timestamp = System.currentTimeMillis()
+                    )
+                    addAnomaly(scanAnomaly)
+                }
+                return null
+            }
+            appFlowCounts[uid] = currentCount + 1
+        }
+        
+        // Store the new flow
+        val existing = activeFlows.putIfAbsent(key, flow)
+        if (existing != null) {
+            // Another thread beat us - use existing, undo app count
+            flow.appUid?.let { uid ->
+                appFlowCounts.computeIfPresent(uid) { _, count -> 
+                    if (count > 0) count - 1 else 0 
+                }
+            }
+            return existing
+        }
+        
+        // Filter out our own traffic from logs
+        if (flow.appName != "com.yuzi.odana") {
+            Log.d(TAG, "New Flow: $key [App: ${flow.appName}] (active: ${activeFlows.size})")
+        }
+        
+        return flow
     }
     
     private fun resolveAppUid(flow: Flow, packet: Packet) {
@@ -187,8 +275,65 @@ object FlowManager {
 
     fun processPacket(packet: Packet) {
         if (!packet.isIpv4) return
-
-        val flow = getFlow(packet)
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // FLOOD DETECTION & SAMPLING
+        // ═══════════════════════════════════════════════════════════════════════
+        packetCounter++
+        
+        val now = System.currentTimeMillis()
+        val elapsed = now - lastPacketCountTime
+        
+        // Check packet rate every second
+        if (elapsed >= 1000) {
+            val packetsPerSecond = (packetCounter * 1000) / elapsed
+            
+            val wasFloodMode = isFloodMode
+            isFloodMode = packetsPerSecond > FLOOD_THRESHOLD_PER_SECOND
+            _isUnderFlood.value = isFloodMode
+            
+            if (isFloodMode && !wasFloodMode) {
+                Log.w(TAG, "⚠️ FLOOD MODE ACTIVATED: $packetsPerSecond pkt/s - sampling 1:$FLOOD_SAMPLE_RATE")
+                
+                // Create flood alert
+                val floodAnomaly = AnomalyResult(
+                    score = 0.85f,
+                    severity = AnomalySeverity.MEDIUM,
+                    reasons = listOf(
+                        "Traffic flood detected: $packetsPerSecond packets/sec",
+                        "Sampling mode activated to prevent app crash",
+                        "May indicate DoS attempt or network scanning"
+                    ),
+                    breakdown = com.yuzi.odana.ml.ScoreBreakdown(
+                        temporal = 0.2f,
+                        volume = 1.0f,
+                        destination = 0.5f
+                    ),
+                    appUid = -1,
+                    appName = "System",
+                    flowKey = "Traffic Flood",
+                    timestamp = System.currentTimeMillis()
+                )
+                addAnomaly(floodAnomaly)
+            } else if (!isFloodMode && wasFloodMode) {
+                Log.i(TAG, "✓ Flood mode deactivated, normal processing resumed")
+                // Reset scan alerts so they can trigger again next flood
+                portScanAlertedApps.clear()
+            }
+            
+            packetCounter = 0
+            lastPacketCountTime = now
+        }
+        
+        // In flood mode, only process every Nth packet
+        if (isFloodMode && (packetCounter % FLOOD_SAMPLE_RATE != 0L)) {
+            packetsDropped++
+            return
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        
+        val flow = getFlow(packet) ?: return  // null = dropped due to limits
         flow.addPacket(packet)
         
         if (flow.appUid == null && flow.packets < 5) {
@@ -214,6 +359,13 @@ object FlowManager {
                 staleEntries.add(flow)
                 iterator.remove()
                 
+                // Decrement per-app flow counter
+                flow.appUid?.let { uid ->
+                    appFlowCounts.computeIfPresent(uid) { _, count ->
+                        if (count > 1) count - 1 else null  // Remove entry if 0
+                    }
+                }
+                
                 // Smaller batch saves = more frequent but lighter writes
                 if (staleEntries.size >= BATCH_SIZE) {
                     saveFlows(staleEntries.toList())
@@ -223,7 +375,7 @@ object FlowManager {
         }
 
         if (staleEntries.isNotEmpty()) {
-            Log.i(TAG, "Persisting ${staleEntries.size} stale flows")
+            Log.i(TAG, "Persisting ${staleEntries.size} stale flows (active: ${activeFlows.size})")
             saveFlows(staleEntries)
         }
     }
@@ -253,6 +405,13 @@ object FlowManager {
         try {
             val allFlows = ArrayList(activeFlows.values)
             activeFlows.clear()
+            appFlowCounts.clear()  // Reset per-app counters
+            portScanAlertedApps.clear()  // Reset scan alerts
+            
+            // Reset flood state
+            isFloodMode = false
+            _isUnderFlood.value = false
+            packetCounter = 0
             
             // Update UI immediately to show flows are gone
             _activeFlowsState.value = emptyList()
@@ -390,6 +549,23 @@ object FlowManager {
     fun clearAnomalies() {
         _recentAnomalies.value = emptyList()
         _anomalyCount.value = 0
+    }
+    
+    /**
+     * Add an anomaly to the list (used by flood/scan detection).
+     */
+    private fun addAnomaly(anomaly: AnomalyResult) {
+        val current = _recentAnomalies.value.toMutableList()
+        current.add(0, anomaly)
+        if (current.size > MAX_RECENT_ANOMALIES) {
+            _recentAnomalies.value = current.take(MAX_RECENT_ANOMALIES)
+        } else {
+            _recentAnomalies.value = current
+        }
+        _anomalyCount.value += 1
+        
+        // Also trigger notification
+        AnomalyNotifier.notifyIfNeeded(anomaly)
     }
     
     /**

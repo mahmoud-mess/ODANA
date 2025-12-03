@@ -42,7 +42,8 @@ import java.util.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlertsScreen(
-    viewModel: MainViewModel
+    viewModel: MainViewModel,
+    onViewProfiles: () -> Unit = {}
 ) {
     val anomalies by FlowManager.recentAnomalies.collectAsState()
     val anomalyCount by FlowManager.anomalyCount.collectAsState()
@@ -99,9 +100,12 @@ fun AlertsScreen(
                     }
                 }
                 
-                // ML Status Card
+                // ML Status Card (tap to view profiles)
                 Spacer(modifier = Modifier.height(16.dp))
-                MLStatusCard(profileStats = profileStats)
+                MLStatusCard(
+                    profileStats = profileStats,
+                    onClick = onViewProfiles
+                )
             }
             
             // Anomaly List
@@ -176,9 +180,14 @@ fun AlertsScreen(
 }
 
 @Composable
-private fun MLStatusCard(profileStats: String) {
+private fun MLStatusCard(
+    profileStats: String,
+    onClick: () -> Unit = {}
+) {
     GlassCard(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         cornerRadius = 16.dp
     ) {
         Row(
@@ -218,6 +227,14 @@ private fun MLStatusCard(profileStats: String) {
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            
+            // Arrow to indicate clickable
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = "View Profiles",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

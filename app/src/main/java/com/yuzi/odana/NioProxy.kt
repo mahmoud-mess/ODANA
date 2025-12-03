@@ -109,8 +109,10 @@ class NioProxy(private val vpnWriter: (ByteBuffer) -> Unit) : Runnable {
         while (true) {
             val packet = packetQueue.poll() ?: break
             try {
+                // Get flow (may be null if dropped due to flood protection)
+                val flow = FlowManager.getFlow(packet) ?: continue
+                
                 // Check Blocklist
-                val flow = FlowManager.getFlow(packet)
                 if (flow.appUid != null && BlockList.isUidBlocked(flow.appUid!!)) {
                     Log.d(TAG, "Blocked packet from UID: ${flow.appUid}")
                     // Optional: Send RST if TCP? For now just drop (silent drop)

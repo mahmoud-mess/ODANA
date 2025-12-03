@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.yuzi.odana.ml.AnomalySeverity
 import com.yuzi.odana.ui.components.*
 import com.yuzi.odana.ui.formatBytes
 import com.yuzi.odana.ui.theme.*
@@ -32,6 +33,7 @@ fun DashboardScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val appUsageStats by viewModel.appUsageStats.collectAsState()
+    val recentAnomalies by FlowManager.recentAnomalies.collectAsState()
     
     // Calculate protocol distribution from active flows
     val activeFlows = FlowManager.activeFlowsState.collectAsState().value
@@ -43,6 +45,19 @@ fun DashboardScreen(
     
     // Top 3 apps for quick view
     val topApps = appUsageStats.take(3)
+    
+    // Calculate worst severity in last hour for pulse color
+    val oneHourAgo = System.currentTimeMillis() - (60 * 60 * 1000)
+    val recentSeverity = recentAnomalies
+        .filter { it.timestamp > oneHourAgo }
+        .maxByOrNull { it.severity.ordinal }
+        ?.severity
+    
+    val pulseAlertColor: Color? = when (recentSeverity) {
+        AnomalySeverity.HIGH -> ErrorRed
+        AnomalySeverity.MEDIUM -> WarningAmber
+        else -> null  // Normal wisteria
+    }
     
     Box(
         modifier = modifier
@@ -101,7 +116,8 @@ fun DashboardScreen(
                 ) {
                     NetworkPulse(
                         activeConnections = uiState.activeFlowsCount,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        alertColor = pulseAlertColor
                     )
                 }
             }
@@ -215,7 +231,11 @@ fun DashboardScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(60.dp),
-                        color = if (uiState.activeFlowsCount > 0) CyberMint else Wisteria700.copy(alpha = 0.5f)
+                        color = when {
+                            pulseAlertColor != null -> pulseAlertColor  // Match alert color
+                            uiState.activeFlowsCount > 0 -> CyberMint
+                            else -> Wisteria700.copy(alpha = 0.5f)
+                        }
                     )
                 }
             }
