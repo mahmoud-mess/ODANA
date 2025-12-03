@@ -21,7 +21,9 @@ data class UiState(
     val totalPages: Int = 1,
     val isLoading: Boolean = false,
     val searchQuery: String = "",
-    val selectedFlow: FlowEntity? = null // Full detail when selected
+    val selectedFlow: FlowEntity? = null, // Full detail when selected
+    val activeFlowsCount: Int = 0,
+    val totalDataTransferred: Long = 0
 )
 
 class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
@@ -41,15 +43,20 @@ class MainViewModel(private val flowDao: FlowDao) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            FlowManager.activeFlowsState.collectLatest {
+            FlowManager.activeFlowsState.collectLatest { activeFlows ->
+                _uiState.value = _uiState.value.copy(activeFlowsCount = activeFlows.size)
                 if (_uiState.value.page == 0 && _uiState.value.searchQuery.isBlank()) {
-                     // Optimization: Only auto-refresh on page 0 active
-                     // To handle search on active items, we trigger loadData() but don't loop it here for now
-                     // Actually, let's just simple refresh for now
+                    // Optimization: Only auto-refresh on page 0 active
                     if (_uiState.value.selectedFlow == null) {
                         loadData(refreshActive = true)
                     }
                 }
+            }
+        }
+        viewModelScope.launch {
+            appUsageStats.collect { usageList ->
+                val totalBytes = usageList.sumOf { it.totalBytes }
+                _uiState.value = _uiState.value.copy(totalDataTransferred = totalBytes)
             }
         }
         loadData()

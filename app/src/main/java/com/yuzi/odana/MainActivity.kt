@@ -43,9 +43,11 @@ import com.yuzi.odana.data.BlockList
 import com.yuzi.odana.data.FlowEntity
 import com.yuzi.odana.data.FlowSummary
 import com.yuzi.odana.ui.theme.ODANATheme
+import com.yuzi.odana.ui.formatBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Dashboard
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -126,35 +128,48 @@ fun MainTabScreen(
     onStopVpn: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("Dashboard", "Monitor", "Stats")
 
     Scaffold(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.List, contentDescription = "Monitor") },
-                    label = { Text("Monitor") },
+                    icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
+                    label = { Text("Dashboard") },
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Info, contentDescription = "Stats") },
-                    label = { Text("Stats") },
+                    icon = { Icon(Icons.Default.List, contentDescription = "Monitor") },
+                    label = { Text("Monitor") },
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Info, contentDescription = "Stats") },
+                    label = { Text("Stats") },
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 }
                 )
             }
         }
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding)) {
-            if (selectedTab == 0) {
-                MainScreen(
-                    viewModel = viewModel,
-                    onStartVpn = onStartVpn,
-                    onStopVpn = onStopVpn,
-                    onFlowClick = { viewModel.onFlowSelected(it) }
-                )
-            } else {
-                StatsScreen(viewModel)
+            when (selectedTab) {
+                0 -> {
+                    DashboardScreen(viewModel)
+                }
+                1 -> {
+                    MainScreen(
+                        viewModel = viewModel,
+                        onStartVpn = onStartVpn,
+                        onStopVpn = onStopVpn,
+                        onFlowClick = { viewModel.onFlowSelected(it) }
+                    )
+                }
+                2 -> {
+                    StatsScreen(viewModel)
+                }
             }
         }
     }
@@ -452,14 +467,6 @@ fun FlowItem(flow: FlowSummary, onClick: () -> Unit) {
             }
         }
     }
-}
-
-fun formatBytes(bytes: Long): String {
-    if (bytes < 1024) return "$bytes B"
-    val kb = bytes / 1024.0
-    if (kb < 1024) return String.format("%.1f KB", kb)
-    val mb = kb / 1024.0
-    return String.format("%.1f MB", mb)
 }
 
 fun formatTime(timestamp: Long): String {

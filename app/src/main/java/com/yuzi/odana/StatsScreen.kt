@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.yuzi.odana.data.AppUsage
 import com.yuzi.odana.ui.components.ChartData
 import com.yuzi.odana.ui.components.DonutChart
+import com.yuzi.odana.ui.formatBytes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,37 +64,41 @@ fun StatsScreen(viewModel: MainViewModel) {
     }
     
     val (chartSectors, colorMap) = remember(stats) {
-        val total = stats.sumOf { it.totalBytes }
-        if (total == 0L) return@remember Pair(emptyList<ChartData>(), emptyMap<String, Color>())
-        
-        val colorMapInternal = mutableMapOf<String, Color>()
-        stats.forEachIndexed { index, app ->
-            val appName = app.appName ?: "Unknown"
-            colorMapInternal[appName] = chartColors.getOrElse(index) { Color.Gray }
-        }
+        val result: Pair<List<ChartData>, Map<String, Color>> =
+            if (stats.sumOf { it.totalBytes } == 0L) {
+                Pair(emptyList(), emptyMap())
+            } else {
+                val colorMapInternal = mutableMapOf<String, Color>()
+                stats.forEachIndexed { index, app ->
+                    val appName = app.appName ?: "Unknown"
+                    colorMapInternal[appName] = chartColors.getOrElse(index) { Color.Gray }
+                }
 
-        // Aggregate "Others" for chart if more than 5 apps
-        val top5 = stats.take(5)
-        val othersBytes = stats.drop(5).sumOf { it.totalBytes }
-        
-        val chartSectorsInternal = top5.map { app ->
-            ChartData(
-                value = app.totalBytes.toFloat(),
-                color = colorMapInternal[app.appName] ?: Color.Gray,
-                label = app.appName ?: "Unknown"
-            )
-        }.toMutableList()
-        
-        if (othersBytes > 0) {
-            chartSectorsInternal.add(
-                ChartData(
-                    value = othersBytes.toFloat(),
-                    color = Color.LightGray, // Consistent color for "Others"
-                    label = "Others"
-                )
-            )
-        }
-        Pair(chartSectorsInternal, colorMapInternal)
+                val top5 = stats.take(5)
+                val othersBytes = stats.drop(5).sumOf { it.totalBytes }
+
+                val chartSectorsInternal = top5.map { app ->
+                    ChartData(
+                        value = app.totalBytes.toFloat(),
+                        color = colorMapInternal[app.appName] ?: Color.Gray,
+                        label = app.appName ?: "Unknown"
+                    )
+                }.toMutableList()
+
+                if (othersBytes > 0) {
+                    chartSectorsInternal.add(
+                        ChartData(
+                            value = othersBytes.toFloat(),
+                            color = Color.LightGray,
+                            label = "Others"
+                        )
+                    )
+                }
+
+                Pair(chartSectorsInternal, colorMapInternal)
+            }
+
+        result
     }
     
     val totalString = remember(stats) {
