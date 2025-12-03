@@ -44,6 +44,12 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0") // Or the latest stable version
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0") // Or the latest stable version
+
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

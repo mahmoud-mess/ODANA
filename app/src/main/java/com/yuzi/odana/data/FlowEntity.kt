@@ -15,5 +15,7 @@ data class FlowEntity(
     val bytes: Long,
     val packets: Long,
     val durationMs: Long,
-    val sni: String?
+    val sni: String?,
+    val payloadHex: String? = null,
+    val payloadText: String? = null
 )

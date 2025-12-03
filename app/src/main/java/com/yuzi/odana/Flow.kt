@@ -15,13 +15,44 @@ class Flow(val key: FlowKey) {
     var appName: String? = null
     var detectedSni: String? = null
     
+    // Payload Capture (Limit 1MB)
+    private val payloadStream = java.io.ByteArrayOutputStream()
+    
     fun addPacket(packet: Packet) {
         lastUpdated = System.currentTimeMillis()
         packets++
         bytes += packet.totalLength
         
-        // Check for TCP Flags (Simple heuristic)
+        // Capture Payload
+        packet.payload?.let { buffer ->
+            if (payloadStream.size() < 1048576) {
+                val remaining = buffer.remaining()
+                if (remaining > 0) {
+                    val bytes = ByteArray(remaining)
+                    val pos = buffer.position()
+                    buffer.get(bytes)
+                    buffer.position(pos) // Restore position for other readers
+                    
+                    val space = 1048576 - payloadStream.size()
+                    val toWrite = kotlin.math.min(remaining, space)
+                    payloadStream.write(bytes, 0, toWrite)
+                }
+            }
+        }
+        
+        // Check for TCP Flags
         if (packet.isTcp) {
+             val buffer = packet.buffer
+             val flagsOffset = packet.headerLength + 13
+             if (buffer.limit() > flagsOffset) {
+                 val flags = buffer.get(flagsOffset).toInt()
+                 val isFin = (flags and 0x01) != 0
+                 val isRst = (flags and 0x04) != 0
+                 if (isFin || isRst) {
+                     isClosed = true
+                 }
+             }
+
              // Attempt SNI extraction on Client Hello
              if (detectedSni == null && packet.payload != null) {
                  detectedSni = TlsParser.extractSni(packet.payload!!)
@@ -30,5 +61,55 @@ class Flow(val key: FlowKey) {
                  }
              }
         }
+    }
+    
+    fun isStale(timeoutMs: Long): Boolean {
+        return (System.currentTimeMillis() - lastUpdated) > timeoutMs
+    }
+    
+    fun getPayloadHex(): String {
+        val bytes = payloadStream.toByteArray()
+        if (bytes.isEmpty()) return ""
+        
+        val sb = StringBuilder()
+        // Simple Hex + ASCII Dump
+        for (i in bytes.indices step 16) {
+            // Hex
+            for (j in 0 until 16) {
+                if (i + j < bytes.size) {
+                    sb.append(String.format("%02X ", bytes[i + j]))
+                } else {
+                    sb.append("   ")
+                }
+            }
+            sb.append("  ")
+            // ASCII
+            for (j in 0 until 16) {
+                if (i + j < bytes.size) {
+                    val b = bytes[i + j].toInt().toChar()
+                    if (b in ' '..'~') sb.append(b) else sb.append('.')
+                }
+            }
+            sb.append("\n")
+        }
+        return sb.toString()
+    }
+    
+    fun getPayloadText(): String {
+        val bytes = payloadStream.toByteArray()
+        if (bytes.isEmpty()) return ""
+        
+        // Attempt to create a string, replacing control chars
+        val sb = StringBuilder()
+        for (b in bytes) {
+            val c = b.toInt().toChar()
+            // Allow newlines and tabs, otherwise printable ASCII
+            if (c == '\n' || c == '\r' || c == '\t' || (c in ' '..'~')) {
+                sb.append(c)
+            } else {
+                sb.append('.')
+            }
+        }
+        return sb.toString()
     }
 }

@@ -8,8 +8,13 @@ import android.util.Log
 import androidx.room.Room
 import com.yuzi.odana.data.AppDatabase
 import com.yuzi.odana.data.FlowEntity
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
@@ -22,16 +27,40 @@ object FlowManager {
     
     private var connectivityManager: ConnectivityManager? = null
     private var packageManager: PackageManager? = null
-    private var db: AppDatabase? = null
+    var db: AppDatabase? = null
+
+    // Live Flow State
+    private val managerScope = CoroutineScope(Dispatchers.Default)
+    private val _activeFlowsState = MutableStateFlow<List<Flow>>(emptyList())
+    val activeFlowsState: StateFlow<List<Flow>> = _activeFlowsState
     
     fun initialize(context: Context) {
+        if (db != null) return // Already initialized
+        
         connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         packageManager = context.packageManager
         
         db = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java, "odana-db"
-        ).build()
+        )
+        .fallbackToDestructiveMigration()
+        .build()
+        
+        // Start periodic UI update loop (Throttle: 500ms)
+        managerScope.launch {
+            while (true) {
+                if (activeFlows.isNotEmpty()) {
+                    _activeFlowsState.value = activeFlows.values.toList()
+                        .sortedByDescending { it.lastUpdated }
+                } else {
+                    if (_activeFlowsState.value.isNotEmpty()) {
+                        _activeFlowsState.value = emptyList()
+                    }
+                }
+                delay(500)
+            }
+        }
     }
 
     fun getFlow(packet: Packet): Flow {
@@ -46,7 +75,10 @@ object FlowManager {
         return activeFlows.computeIfAbsent(key) { 
             val flow = Flow(key)
             resolveAppUid(flow, packet)
-            Log.i(TAG, "New Flow: $key [App: ${flow.appName}]")
+            // Filter out our own traffic from logs to prevent flooding
+            if (flow.appName != "com.yuzi.odana") {
+                Log.i(TAG, "New Flow: $key [App: ${flow.appName}]")
+            }
             flow
         }
     }
@@ -113,19 +145,28 @@ object FlowManager {
     
     suspend fun cleanupStaleFlows() {
         val now = System.currentTimeMillis()
-        val iterator = activeFlows.entries.iterator()
-        
-        // We need to collect flows to remove first to avoid concurrent modification issues 
-        // if we were to do complex DB ops inside the iterator loop, though iterator.remove() is safe for CHM.
-        // But DB ops are slow, so we shouldn't block the CHM iterator.
-        
         val staleEntries = mutableListOf<Flow>()
+        val batchSize = 50
         
+        val iterator = activeFlows.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
-            if (now - entry.value.lastUpdated > UDP_TIMEOUT_MS) {
-                staleEntries.add(entry.value)
+            val flow = entry.value
+            
+            // Eviction Criteria:
+            // 1. TCP Connection Closed (FIN/RST)
+            // 2. Idle for > 30 seconds (UDP or stuck TCP)
+            val isStale = flow.isClosed || (now - flow.lastUpdated > 30000)
+            
+            if (isStale) {
+                staleEntries.add(flow)
                 iterator.remove()
+                
+                // Batch Save to prevent memory spike if many flows close at once
+                if (staleEntries.size >= batchSize) {
+                    saveFlows(staleEntries.toList())
+                    staleEntries.clear()
+                }
             }
         }
 
@@ -182,7 +223,9 @@ object FlowManager {
                     bytes = flow.bytes,
                     packets = flow.packets,
                     durationMs = flow.lastUpdated - flow.startTime,
-                    sni = flow.detectedSni
+                    sni = flow.detectedSni,
+                    payloadHex = flow.getPayloadHex(),
+                    payloadText = flow.getPayloadText()
                 )
                 try {
                     db?.flowDao()?.insert(entity)

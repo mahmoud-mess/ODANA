@@ -15,9 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import com.yuzi.odana.data.BlockList
 import java.io.IOException
 import java.nio.ByteBuffer
-import java.nio.channels.Selector
 
 class OdanaVpnService : VpnService() {
 
@@ -36,6 +36,7 @@ class OdanaVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         FlowManager.initialize(this)
+        BlockList.initialize(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -46,6 +47,8 @@ class OdanaVpnService : VpnService() {
         return START_STICKY
     }
 
+    private var nioProxy: NioProxy? = null
+
     private fun startVpn() {
         if (isRunning) return
         Log.i(TAG, "Starting VPN Service...")
@@ -55,11 +58,18 @@ class OdanaVpnService : VpnService() {
         startForeground(NOTIFICATION_ID, notification)
 
         isRunning = true
+        
+        // Initialize NioProxy with a writer callback
+        nioProxy = NioProxy { buffer ->
+            writeToTun(buffer)
+        }
+        nioProxy?.start()
+
         serviceScope.launch {
             try {
                 establishVpn()
                 startCleanupLoop()
-                startPacketLoop()
+                startTunReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting VPN", e)
                 stopVpn()
@@ -76,11 +86,11 @@ class OdanaVpnService : VpnService() {
         }
     }
 
-    private fun startPacketLoop() {
+    private fun startTunReader() {
         val inputStream = java.io.FileInputStream(vpnInterface!!.fileDescriptor)
         val buffer = ByteBuffer.allocate(32767) // Max IP packet size
 
-        Log.i(TAG, "Starting packet loop...")
+        Log.i(TAG, "Starting TUN reader loop...")
         
         while (isRunning) {
             try {
@@ -90,9 +100,20 @@ class OdanaVpnService : VpnService() {
                     buffer.position(0)
                     
                     try {
-                        val packet = Packet(buffer)
+                        // We must copy the buffer because Packet/NioProxy might queue it 
+                        // and this buffer is reused in the next iteration.
+                        val packetData = ByteBuffer.allocate(length)
+                        packetData.put(buffer)
+                        packetData.flip()
+                        
+                        val packet = Packet(packetData)
+                        
+                        // 1. Log/Analyze (existing logic)
                         FlowManager.processPacket(packet)
-                        // Log.d(TAG, "Packet processed: ${packet.totalLength} bytes")
+                        
+                        // 2. Forward to Proxy (New Logic)
+                        nioProxy?.onPacketFromTun(packet)
+                        
                     } catch (e: Exception) {
                         Log.w(TAG, "Bad packet", e)
                     }
@@ -105,10 +126,27 @@ class OdanaVpnService : VpnService() {
             }
         }
     }
+    
+    private fun writeToTun(buffer: ByteBuffer) {
+        try {
+            val os = java.io.FileOutputStream(vpnInterface?.fileDescriptor ?: return)
+            // FileOutputStream.write(byte[]) writes from 0 to length.
+            // buffer might be sliced or have a position.
+            // We need to extract the bytes.
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            os.write(bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error writing to TUN", e)
+        }
+    }
 
     private fun stopVpn() {
         Log.i(TAG, "Stopping VPN Service...")
         isRunning = false
+        
+        nioProxy?.stop()
+        nioProxy = null
         
         // We use runBlocking to ensure the flush completes before we kill the service/scope.
         // This blocks the main thread, but since we are stopping, it is acceptable for a short DB write.
@@ -140,8 +178,12 @@ class OdanaVpnService : VpnService() {
         builder.setMtu(1500)
         builder.setSession("OdanaVPN")
         
-        // Important: Block ourselves to avoid loops, though we should also protect sockets manually
-        // builder.addDisallowedApplication(packageName) 
+        // Important: Block ourselves to avoid loops
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to exclude self from VPN", e)
+        }
 
         vpnInterface = builder.establish()
         Log.i(TAG, "VPN Interface established: ${vpnInterface?.fileDescriptor}")
