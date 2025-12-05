@@ -12,6 +12,7 @@ import com.yuzi.odana.data.FlowFeatures
 import com.yuzi.odana.ml.AnomalyDetector
 import com.yuzi.odana.ml.AnomalyResult
 import com.yuzi.odana.ml.AnomalySeverity
+import com.yuzi.odana.ml.FeedbackManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -97,13 +98,15 @@ object FlowManager {
         .fallbackToDestructiveMigration()
         .build()
         
-        // Initialize ML Anomaly Detector
+        // Initialize ML Anomaly Detector and Feedback Manager
         managerScope.launch(Dispatchers.IO) {
             try {
                 AnomalyDetector.initialize(db!!.profileDao())
-                Log.i(TAG, "Anomaly Detector initialized")
+                FeedbackManager.initialize(db!!.feedbackDao())
+                FeedbackManager.loadMultipliers()
+                Log.i(TAG, "Anomaly Detector and Feedback Manager initialized")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize Anomaly Detector", e)
+                Log.e(TAG, "Failed to initialize ML systems", e)
             }
         }
         

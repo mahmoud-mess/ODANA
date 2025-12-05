@@ -27,9 +27,11 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.yuzi.odana.ml.AnomalyDetector
 import com.yuzi.odana.ml.AppProfile
+import com.yuzi.odana.ml.FeedbackManager
 import com.yuzi.odana.ui.components.*
 import com.yuzi.odana.ui.formatBytes
 import com.yuzi.odana.ui.theme.*
+import kotlinx.coroutines.launch
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -44,8 +46,10 @@ import com.yuzi.odana.ui.theme.*
 fun ProfilesScreen(
     onBack: () -> Unit
 ) {
-    val profiles = remember { AnomalyDetector.getAllProfiles().sortedByDescending { it.flowCount } }
+    var profiles by remember { mutableStateOf(AnomalyDetector.getAllProfiles().sortedByDescending { it.flowCount }) }
     var selectedProfile by remember { mutableStateOf<AppProfile?>(null) }
+    var showDeleteDialog by remember { mutableStateOf<AppProfile?>(null) }
+    val scope = rememberCoroutineScope()
     
     Scaffold(
         topBar = {
@@ -115,10 +119,52 @@ fun ProfilesScreen(
                         isExpanded = selectedProfile == profile,
                         onClick = { 
                             selectedProfile = if (selectedProfile == profile) null else profile
-                        }
+                        },
+                        onDelete = { showDeleteDialog = profile }
                     )
                 }
             }
+        }
+        
+        // Delete confirmation dialog
+        showDeleteDialog?.let { profileToDelete ->
+            AlertDialog(
+                onDismissRequest = { showDeleteDialog = null },
+                title = { 
+                    Text(
+                        "Reset Profile?",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = { 
+                    Text(
+                        "This will delete all learned behavior for ${profileToDelete.appName ?: "UID:${profileToDelete.appUid}"}.\n\n" +
+                        "The app will be treated as new and the ML will start learning from scratch."
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                AnomalyDetector.deleteProfile(profileToDelete.appUid)
+                                profiles = profiles.filter { it.appUid != profileToDelete.appUid }
+                                selectedProfile = null
+                                showDeleteDialog = null
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ErrorRed
+                        )
+                    ) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteDialog = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }
@@ -127,9 +173,20 @@ fun ProfilesScreen(
 private fun ProfileCard(
     profile: AppProfile,
     isExpanded: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var feedbackSummary by remember { mutableStateOf<String?>(null) }
+    
+    // Load feedback summary when expanded
+    LaunchedEffect(isExpanded, profile.appUid) {
+        if (isExpanded) {
+            feedbackSummary = FeedbackManager.getFeedbackSummary(profile.appUid)
+        }
+    }
+    
     val maturityColor = when (profile.maturityLevel) {
         AppProfile.MATURITY_MATURE -> SuccessGreen
         AppProfile.MATURITY_LEARNING -> WarningAmber
@@ -325,6 +382,49 @@ private fun ProfileCard(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
                     DaysOfWeekIndicator(activeDays = profile.activeDaysOfWeek)
+                    
+                    // User feedback summary
+                    feedbackSummary?.let { summary ->
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Feedback,
+                                contentDescription = null,
+                                tint = Wisteria400,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                    
+                    // Delete profile button
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    OutlinedButton(
+                        onClick = onDelete,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = ErrorRed
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DeleteOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reset Learned Behavior")
+                    }
                 }
             }
             

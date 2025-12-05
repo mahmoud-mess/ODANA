@@ -26,8 +26,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yuzi.odana.ml.AnomalyResult
 import com.yuzi.odana.ml.AnomalySeverity
+import com.yuzi.odana.ml.FeedbackManager
+import com.yuzi.odana.ml.UserFeedback
 import com.yuzi.odana.ui.components.*
 import com.yuzi.odana.ui.theme.*
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -242,6 +245,8 @@ private fun MLStatusCard(
 @Composable
 private fun AnomalyCard(anomaly: AnomalyResult) {
     var expanded by remember { mutableStateOf(false) }
+    var feedbackGiven by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     
     val severityColor = when (anomaly.severity) {
         AnomalySeverity.HIGH -> ErrorRed
@@ -415,6 +420,108 @@ private fun AnomalyCard(anomaly: AnomalyResult) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                     )
+                    
+                    // Feedback buttons
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    if (feedbackGiven != null) {
+                        // Show confirmation
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (feedbackGiven == UserFeedback.VERDICT_NORMAL) 
+                                    "Marked as normal" else "Marked as suspicious",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    } else {
+                        // Show feedback buttons
+                        Text(
+                            text = "Was this alert accurate?",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Mark as Normal button
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        FeedbackManager.recordFeedback(
+                                            appUid = anomaly.appUid,
+                                            appName = anomaly.appName,
+                                            verdict = UserFeedback.VERDICT_NORMAL,
+                                            originalScore = anomaly.score,
+                                            destination = anomaly.flowKey,
+                                            reasons = anomaly.reasons
+                                        )
+                                        feedbackGiven = UserFeedback.VERDICT_NORMAL
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = SuccessGreen
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ThumbUp,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Normal", style = MaterialTheme.typography.labelMedium)
+                            }
+                            
+                            // Mark as Suspicious button
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        FeedbackManager.recordFeedback(
+                                            appUid = anomaly.appUid,
+                                            appName = anomaly.appName,
+                                            verdict = UserFeedback.VERDICT_SUSPICIOUS,
+                                            originalScore = anomaly.score,
+                                            destination = anomaly.flowKey,
+                                            reasons = anomaly.reasons
+                                        )
+                                        feedbackGiven = UserFeedback.VERDICT_SUSPICIOUS
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = ErrorRed,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Flag,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Suspicious", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
                 }
             }
             

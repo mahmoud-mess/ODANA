@@ -144,14 +144,20 @@ object AnomalyDetector {
         val destResult = DestinationScorer.score(flow, profile)
         
         // Combine scores with confidence weighting
-        val combinedScore = combineScores(
+        val baseScore = combineScores(
             temporalResult, volumeResult, destResult, profile
         )
+        
+        // Apply user feedback multiplier
+        // If user has marked this app as suspicious, scores are amplified
+        // If user has marked things as normal, scores are dampened
+        val feedbackMultiplier = FeedbackManager.getSuspicionMultiplier(appUid)
+        val combinedScore = (baseScore * feedbackMultiplier).coerceIn(0f, 1f)
         
         // Collect all reasons
         val allReasons = temporalResult.reasons + volumeResult.reasons + destResult.reasons
         
-        // Determine severity
+        // Determine severity (using adjusted score)
         val severity = when {
             combinedScore >= thresholds.highAnomaly -> AnomalySeverity.HIGH
             combinedScore >= thresholds.mediumAnomaly -> AnomalySeverity.MEDIUM
@@ -195,6 +201,26 @@ object AnomalyDetector {
      * Get all profiles (for debugging/export).
      */
     fun getAllProfiles(): List<AppProfile> = profileCache.values.toList()
+    
+    /**
+     * Delete a profile (reset learned behavior for an app).
+     */
+    suspend fun deleteProfile(appUid: Int) {
+        profileCache.remove(appUid)
+        profileLocks.remove(appUid)
+        dirtyProfiles.remove(appUid)
+        
+        // Delete from database
+        withContext(Dispatchers.IO) {
+            try {
+                profileDao?.deleteProfile(appUid)
+                // Also clear feedback for this app
+                FeedbackManager.clearFeedbackForApp(appUid)
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Failed to delete profile for $appUid", e)
+            }
+        }
+    }
     
     /**
      * Force persist all dirty profiles to database.
