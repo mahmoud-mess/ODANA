@@ -11,8 +11,18 @@ class TcpSession(
     val destPort: Int,
     var channel: SocketChannel?
 ) {
+    // Full TCP state machine states
     enum class State {
-        CLOSED, SYN_RECEIVED, ESTABLISHED, FIN_WAIT, CLOSE_WAIT
+        CLOSED,
+        SYN_SENT,
+        SYN_RECEIVED,
+        ESTABLISHED,
+        FIN_WAIT_1,
+        FIN_WAIT_2,
+        CLOSE_WAIT,
+        CLOSING,
+        LAST_ACK,
+        TIME_WAIT
     }
 
     var state: State = State.CLOSED

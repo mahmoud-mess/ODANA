@@ -87,12 +87,24 @@ class OdanaVpnService : VpnService() {
     }
 
     private fun startTunReader() {
-        val inputStream = java.io.FileInputStream(vpnInterface!!.fileDescriptor)
+        val fd = vpnInterface?.fileDescriptor
+        if (fd == null || !fd.valid()) {
+            Log.e(TAG, "Invalid file descriptor, cannot start TUN reader")
+            return
+        }
+        
+        val inputStream = java.io.FileInputStream(fd)
         val buffer = ByteBuffer.allocate(32767) // Max IP packet size
 
         Log.i(TAG, "Starting TUN reader loop...")
         
         while (isRunning) {
+            // Check FD validity periodically
+            if (!fd.valid()) {
+                Log.w(TAG, "File descriptor became invalid, stopping TUN reader")
+                break
+            }
+            
             try {
                 val length = inputStream.read(buffer.array())
                 if (length > 0) {
@@ -221,5 +233,15 @@ class OdanaVpnService : VpnService() {
     override fun onDestroy() {
         super.onDestroy()
         stopVpn()
+    }
+    
+    /**
+     * Called when the VPN is revoked by the system or another VPN app.
+     * This can happen if user starts another VPN or system revokes permission.
+     */
+    override fun onRevoke() {
+        Log.w(TAG, "VPN revoked by system or another app")
+        stopVpn()
+        super.onRevoke()
     }
 }

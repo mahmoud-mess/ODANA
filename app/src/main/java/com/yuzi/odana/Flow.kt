@@ -23,11 +23,11 @@ class Flow(val key: FlowKey) {
     var appName: String? = null
     var detectedSni: String? = null
     
-    // Payload Capture (Limit 256KB - enough for TLS fingerprinting & inspection)
+    // Payload Capture (Limit 64KB - reduced from 256KB for memory efficiency)
     private val payloadStream = java.io.ByteArrayOutputStream()
     
     companion object {
-        const val MAX_PAYLOAD_SIZE = 262144 // 256KB
+        const val MAX_PAYLOAD_SIZE = 65536 // 64KB (reduced from 256KB)
     }
     
     fun addPacket(packet: Packet) {

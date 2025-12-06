@@ -8,9 +8,11 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.SocketChannel
 import java.nio.channels.spi.AbstractSelectableChannel
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.net.InetAddress
+import kotlin.random.Random
 
 import com.yuzi.odana.data.BlockList
 
@@ -18,7 +20,11 @@ class NioProxy(private val vpnWriter: (ByteBuffer) -> Unit) : Runnable {
 
     private val TAG = "NioProxy"
     private val selector: Selector = Selector.open()
-    private val packetQueue = ConcurrentLinkedQueue<Packet>()
+    
+    // Bounded queue with backpressure (max 1000 packets)
+    private val QUEUE_CAPACITY = 1000
+    private val packetQueue = ArrayBlockingQueue<Packet>(QUEUE_CAPACITY)
+    private val droppedPackets = AtomicLong(0)
     
     // UDP Map
     // Key: "SourceIp:SourcePort|DestIp:DestPort|Protocol"
@@ -44,7 +50,16 @@ class NioProxy(private val vpnWriter: (ByteBuffer) -> Unit) : Runnable {
     }
 
     fun onPacketFromTun(packet: Packet) {
-        packetQueue.offer(packet)
+        // Non-blocking offer with backpressure: drop oldest if full
+        if (!packetQueue.offer(packet)) {
+            // Queue full - drop oldest packet and try again
+            packetQueue.poll()
+            packetQueue.offer(packet)
+            val dropped = droppedPackets.incrementAndGet()
+            if (dropped % 100 == 0L) {
+                Log.w(TAG, "Queue full - dropped $dropped packets total")
+            }
+        }
         selector.wakeup()
     }
 
@@ -170,8 +185,8 @@ class NioProxy(private val vpnWriter: (ByteBuffer) -> Unit) : Runnable {
                     // Initialize Seq Numbers
                     // We ack their SYN (Seq + 1)
                     session.myAck = seqNum + 1
-                    // We start our Seq at a random number (e.g., 1000 for debug)
-                    session.mySeq = 1000 
+                    // Random ISN for security (avoid predictable sequence numbers)
+                    session.mySeq = Random.nextLong(0, 0xFFFFFFFFL) 
 
                     tcpSessionMap[keyStr] = session
                     channelKeyMap[channel] = key

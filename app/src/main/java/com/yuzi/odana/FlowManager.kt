@@ -23,11 +23,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object FlowManager {
     private const val TAG = "FlowManager"
     private val activeFlows = ConcurrentHashMap<FlowKey, Flow>()
     private val uidCache = ConcurrentHashMap<Int, String>()
+    private const val UID_CACHE_MAX_SIZE = 500
     private const val UDP_TIMEOUT_MS = 60000L // 60 seconds
     
     // Tuned for reliability
@@ -44,12 +47,20 @@ object FlowManager {
     private const val FLOOD_THRESHOLD_PER_SECOND = 400  // Packets/sec that triggers flood mode
     private const val FLOOD_SAMPLE_RATE = 10           // In flood mode, process every Nth packet
     
-    private var isFloodMode = false
-    private var packetCounter = 0L
-    private var lastPacketCountTime = System.currentTimeMillis()
-    private var packetsDropped = 0L
+    // Atomic variables for thread-safe flood detection
+    private val isFloodMode = AtomicBoolean(false)
+    private val packetCounter = AtomicLong(0)
+    private val lastPacketCountTime = AtomicLong(System.currentTimeMillis())
+    private var packetsDropped = 0L  // Only written from single thread
     private val appFlowCounts = ConcurrentHashMap<Int, Int>()  // UID -> active flow count
-    private val portScanAlertedApps = mutableSetOf<Int>()      // Apps already alerted for scanning
+    private val portScanAlertedApps: MutableSet<Int> = ConcurrentHashMap.newKeySet()  // Thread-safe set
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // UID RESOLUTION CACHE - Maps destination IPs to known UIDs
+    // ═══════════════════════════════════════════════════════════════════════════
+    private const val IP_UID_CACHE_TTL_MS = 5 * 60 * 1000L  // 5 minutes TTL
+    private data class CachedUid(val uid: Int, val timestamp: Long)
+    private val ipToUidCache = ConcurrentHashMap<String, CachedUid>()
     
     // ═══════════════════════════════════════════════════════════════════════════
     
@@ -229,107 +240,178 @@ object FlowManager {
     
     private fun resolveAppUid(flow: Flow, packet: Packet) {
         if (packet.protocol != 6 && packet.protocol != 17) return
+        
+        val destIp = packet.destIp
+        val now = System.currentTimeMillis()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && connectivityManager != null) {
             try {
                 val sourceAddress = InetSocketAddress(packet.sourceIp, packet.sourcePort)
-                val destAddress = InetSocketAddress(packet.destIp, packet.destPort)
+                val destAddress = InetSocketAddress(destIp, packet.destPort)
                 val uid = connectivityManager!!.getConnectionOwnerUid(
                     packet.protocol,
                     sourceAddress,
                     destAddress
                 )
                 
-                if (uid != -1) {
+                // Success - valid UID found
+                if (uid > 0) {
                     flow.appUid = uid
+                    resolveAppName(flow, uid)
                     
-                    // Check Cache
-                    if (uidCache.containsKey(uid)) {
-                        flow.appName = uidCache[uid]
-                        return
-                    }
-
-                    var name: String? = null
-                    try {
-                        val packages = packageManager?.getPackagesForUid(uid)
-                        name = if (!packages.isNullOrEmpty()) {
-                            packages[0] // Return the package name (e.g. com.google.android.youtube)
-                        } else {
-                            "UID:$uid"
-                        }
-                    } catch (e: SecurityException) {
-                        Log.w(TAG, "Cross-profile access denied for UID $uid")
-                        name = "DualApp/WorkProfile:$uid"
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error resolving package for UID $uid", e)
-                        name = "UID:$uid"
-                    }
-                    
-                    if (name != null) {
-                        flow.appName = name
-                        uidCache[uid] = name
-                    }
+                    // Cache this IP → UID mapping for future flows
+                    ipToUidCache[destIp] = CachedUid(uid, now)
+                    cleanupIpToUidCache(now)
+                    return
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to resolve UID", e)
+                Log.w(TAG, "getConnectionOwnerUid failed", e)
             }
         }
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // FALLBACK 1: Check IP-to-UID cache (from previous successful lookups)
+        // ═══════════════════════════════════════════════════════════════════════
+        ipToUidCache[destIp]?.let { cached ->
+            if (now - cached.timestamp < IP_UID_CACHE_TTL_MS) {
+                flow.appUid = cached.uid
+                resolveAppName(flow, cached.uid)
+                Log.d(TAG, "UID resolved from IP cache: $destIp -> ${flow.appName}")
+                return
+            } else {
+                // Expired entry
+                ipToUidCache.remove(destIp)
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // FALLBACK 2: Check existing active flows for matching destination IP
+        // ═══════════════════════════════════════════════════════════════════════
+        activeFlows.values.find { 
+            it.key.destIp == destIp && it.appUid != null && it.appUid!! > 0 
+        }?.let { matchingFlow ->
+            flow.appUid = matchingFlow.appUid
+            flow.appName = matchingFlow.appName
+            
+            // Cache this for future lookups
+            ipToUidCache[destIp] = CachedUid(matchingFlow.appUid!!, now)
+            Log.d(TAG, "UID inherited from active flow: $destIp -> ${flow.appName}")
+            return
+        }
     }
+    
+    /**
+     * Resolve app name from UID, with caching and LRU eviction.
+     */
+    private fun resolveAppName(flow: Flow, uid: Int) {
+        // Check cache first
+        uidCache[uid]?.let { cachedName ->
+            flow.appName = cachedName
+            return
+        }
+        
+        // Resolve from PackageManager
+        var name: String? = null
+        try {
+            val packages = packageManager?.getPackagesForUid(uid)
+            name = if (!packages.isNullOrEmpty()) {
+                packages[0]
+            } else {
+                "UID:$uid"
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Cross-profile access denied for UID $uid")
+            name = "DualApp/WorkProfile:$uid"
+        } catch (e: Exception) {
+            Log.w(TAG, "Error resolving package for UID $uid", e)
+            name = "UID:$uid"
+        }
+        
+        if (name != null) {
+            flow.appName = name
+            
+            // LRU eviction: remove oldest entries if cache too large
+            if (uidCache.size >= UID_CACHE_MAX_SIZE) {
+                // Remove ~10% of entries (simple eviction, not perfect LRU)
+                val toRemove = uidCache.keys.take(UID_CACHE_MAX_SIZE / 10)
+                toRemove.forEach { uidCache.remove(it) }
+            }
+            uidCache[uid] = name
+        }
+    }
+    
+    /**
+     * Clean up expired entries from IP-to-UID cache.
+     */
+    private fun cleanupIpToUidCache(now: Long) {
+        // Only clean periodically (when cache is large)
+        if (ipToUidCache.size > 100) {
+            val expiredKeys = ipToUidCache.entries
+                .filter { now - it.value.timestamp > IP_UID_CACHE_TTL_MS }
+                .map { it.key }
+            expiredKeys.forEach { ipToUidCache.remove(it) }
+        }
+    }
+
 
     fun processPacket(packet: Packet) {
         if (!packet.isIpv4) return
         
         // ═══════════════════════════════════════════════════════════════════════
-        // FLOOD DETECTION & SAMPLING
+        // FLOOD DETECTION & SAMPLING (Thread-safe with atomics)
         // ═══════════════════════════════════════════════════════════════════════
-        packetCounter++
+        val currentCount = packetCounter.incrementAndGet()
         
         val now = System.currentTimeMillis()
-        val elapsed = now - lastPacketCountTime
+        val lastTime = lastPacketCountTime.get()
+        val elapsed = now - lastTime
         
         // Check packet rate every second
         if (elapsed >= 1000) {
-            val packetsPerSecond = (packetCounter * 1000) / elapsed
-            
-            val wasFloodMode = isFloodMode
-            isFloodMode = packetsPerSecond > FLOOD_THRESHOLD_PER_SECOND
-            _isUnderFlood.value = isFloodMode
-            
-            if (isFloodMode && !wasFloodMode) {
-                Log.w(TAG, "⚠️ FLOOD MODE ACTIVATED: $packetsPerSecond pkt/s - sampling 1:$FLOOD_SAMPLE_RATE")
+            // Only one thread should reset the counter
+            if (lastPacketCountTime.compareAndSet(lastTime, now)) {
+                val packetsPerSecond = (currentCount * 1000) / elapsed
                 
-                // Create flood alert
-                val floodAnomaly = AnomalyResult(
-                    score = 0.85f,
-                    severity = AnomalySeverity.MEDIUM,
-                    reasons = listOf(
-                        "Traffic flood detected: $packetsPerSecond packets/sec",
-                        "Sampling mode activated to prevent app crash",
-                        "May indicate DoS attempt or network scanning"
-                    ),
-                    breakdown = com.yuzi.odana.ml.ScoreBreakdown(
-                        temporal = 0.2f,
-                        volume = 1.0f,
-                        destination = 0.5f
-                    ),
-                    appUid = -1,
-                    appName = "System",
-                    flowKey = "Traffic Flood",
-                    timestamp = System.currentTimeMillis()
-                )
-                addAnomaly(floodAnomaly)
-            } else if (!isFloodMode && wasFloodMode) {
-                Log.i(TAG, "✓ Flood mode deactivated, normal processing resumed")
-                // Reset scan alerts so they can trigger again next flood
-                portScanAlertedApps.clear()
+                val wasFloodMode = isFloodMode.get()
+                val nowFloodMode = packetsPerSecond > FLOOD_THRESHOLD_PER_SECOND
+                isFloodMode.set(nowFloodMode)
+                _isUnderFlood.value = nowFloodMode
+                
+                if (nowFloodMode && !wasFloodMode) {
+                    Log.w(TAG, "⚠️ FLOOD MODE ACTIVATED: $packetsPerSecond pkt/s - sampling 1:$FLOOD_SAMPLE_RATE")
+                    
+                    // Create flood alert
+                    val floodAnomaly = AnomalyResult(
+                        score = 0.85f,
+                        severity = AnomalySeverity.MEDIUM,
+                        reasons = listOf(
+                            "Traffic flood detected: $packetsPerSecond packets/sec",
+                            "Sampling mode activated to prevent app crash",
+                            "May indicate DoS attempt or network scanning"
+                        ),
+                        breakdown = com.yuzi.odana.ml.ScoreBreakdown(
+                            temporal = 0.2f,
+                            volume = 1.0f,
+                            destination = 0.5f
+                        ),
+                        appUid = -1,
+                        appName = "System",
+                        flowKey = "Traffic Flood",
+                        timestamp = System.currentTimeMillis()
+                    )
+                    addAnomaly(floodAnomaly)
+                } else if (!nowFloodMode && wasFloodMode) {
+                    Log.i(TAG, "✓ Flood mode deactivated, normal processing resumed")
+                    // Reset scan alerts so they can trigger again next flood
+                    portScanAlertedApps.clear()
+                }
+                
+                packetCounter.set(0)
             }
-            
-            packetCounter = 0
-            lastPacketCountTime = now
         }
         
         // In flood mode, only process every Nth packet
-        if (isFloodMode && (packetCounter % FLOOD_SAMPLE_RATE != 0L)) {
+        if (isFloodMode.get() && (currentCount % FLOOD_SAMPLE_RATE != 0L)) {
             packetsDropped++
             return
         }
@@ -339,10 +421,12 @@ object FlowManager {
         val flow = getFlow(packet) ?: return  // null = dropped due to limits
         flow.addPacket(packet)
         
-        if (flow.appUid == null && flow.packets < 5) {
+        // Retry UID resolution on first few packets, or if UID is 0 (root/unknown)
+        if ((flow.appUid == null || flow.appUid == 0) && flow.packets < 10) {
              resolveAppUid(flow, packet)
         }
     }
+
     
     suspend fun cleanupStaleFlows() {
         val now = System.currentTimeMillis()
@@ -411,10 +495,11 @@ object FlowManager {
             appFlowCounts.clear()  // Reset per-app counters
             portScanAlertedApps.clear()  // Reset scan alerts
             
-            // Reset flood state
-            isFloodMode = false
+            // Reset flood state (using atomics)
+            isFloodMode.set(false)
             _isUnderFlood.value = false
-            packetCounter = 0
+            packetCounter.set(0)
+            lastPacketCountTime.set(System.currentTimeMillis())
             
             // Update UI immediately to show flows are gone
             _activeFlowsState.value = emptyList()
