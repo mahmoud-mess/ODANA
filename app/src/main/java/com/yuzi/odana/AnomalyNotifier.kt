@@ -37,9 +37,9 @@ object AnomalyNotifier {
     
     // Rate limiting - don't spam notifications
     private var lastNotificationTime = 0L
-    private const val MIN_INTERVAL_MS = 10000L  // 10 seconds between notifications
+    private const val MIN_INTERVAL_MS = 3000L  // 3 seconds between notifications
     private var notificationsThisSession = 0
-    private const val MAX_NOTIFICATIONS_PER_SESSION = 20
+    private const val MAX_NOTIFICATIONS_PER_SESSION = 50  // Increased from 20
     
     /**
      * Initialize the notifier with the app context.
@@ -72,28 +72,45 @@ object AnomalyNotifier {
      * Show a notification for an anomaly if conditions are met.
      */
     fun notifyIfNeeded(anomaly: AnomalyResult) {
-        val ctx = context ?: return
+        val ctx = context ?: run {
+            android.util.Log.w("AnomalyNotifier", "Context not initialized, skipping notification")
+            return
+        }
         
         // Check if notifications are enabled
-        if (!isEnabled) return
+        if (!isEnabled) {
+            android.util.Log.d("AnomalyNotifier", "Notifications disabled")
+            return
+        }
         
         // Check severity threshold
-        if (anomaly.severity.ordinal < minSeverity.ordinal) return
+        if (anomaly.severity.ordinal < minSeverity.ordinal) {
+            android.util.Log.d("AnomalyNotifier", "Severity ${anomaly.severity} below threshold $minSeverity")
+            return
+        }
         
         // Rate limiting
         val now = System.currentTimeMillis()
-        if (now - lastNotificationTime < MIN_INTERVAL_MS) return
-        if (notificationsThisSession >= MAX_NOTIFICATIONS_PER_SESSION) return
+        if (now - lastNotificationTime < MIN_INTERVAL_MS) {
+            android.util.Log.d("AnomalyNotifier", "Rate limited (${now - lastNotificationTime}ms since last)")
+            return
+        }
+        if (notificationsThisSession >= MAX_NOTIFICATIONS_PER_SESSION) {
+            android.util.Log.d("AnomalyNotifier", "Session limit reached ($notificationsThisSession)")
+            return
+        }
         
         // Check notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) 
                 != PackageManager.PERMISSION_GRANTED) {
+                android.util.Log.w("AnomalyNotifier", "POST_NOTIFICATIONS permission not granted")
                 return
             }
         }
         
         // Build and show notification
+        android.util.Log.i("AnomalyNotifier", "Showing notification for ${anomaly.appName}: ${anomaly.severity}")
         showNotification(ctx, anomaly)
         lastNotificationTime = now
         notificationsThisSession++

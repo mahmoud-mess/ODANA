@@ -38,6 +38,11 @@ fun StatsScreen(
         stats.maxOfOrNull { it.totalBytes } ?: 1L
     }
     
+    // Total bytes for percentage calculation
+    val totalBytes = remember(stats) {
+        stats.sumOf { it.totalBytes }.coerceAtLeast(1L)
+    }
+    
     // Prepare Chart Data with wisteria palette
     val (chartSectors, colorMap) = remember(stats) {
         if (stats.sumOf { it.totalBytes } == 0L) {
@@ -291,6 +296,7 @@ fun StatsScreen(
                     AppUsageCard(
                         item = item,
                         maxBytes = maxBytes,
+                        totalBytes = totalBytes,
                         color = colorMap[item.appName] ?: ChartPalette.getOrElse(index) { Wisteria400 },
                         rank = index + 1
                     )
@@ -338,10 +344,13 @@ private fun ChartLegendItem(
 private fun AppUsageCard(
     item: AppUsage,
     maxBytes: Long,
+    totalBytes: Long,
     color: Color,
     rank: Int
 ) {
-    val progress = item.totalBytes.toFloat() / maxBytes.toFloat()
+    // Both bar and percentage show share of total traffic
+    val percentOfTotal = (item.totalBytes.toFloat() / totalBytes.toFloat() * 100)
+    val barProgress = percentOfTotal / 100f  // Bar matches percentage
     
     GlassCard(
         modifier = Modifier.fillMaxWidth(),
@@ -405,14 +414,14 @@ private fun AppUsageCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     GradientProgressBar(
-                        progress = progress,
+                        progress = barProgress,
                         colors = listOf(color, color.copy(alpha = 0.5f)),
                         height = 6,
                         modifier = Modifier.weight(1f)
                     )
                     
                     Text(
-                        text = "${(progress * 100).toInt()}%",
+                        text = "${percentOfTotal.toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
