@@ -329,9 +329,13 @@ fun GradientProgressBar(
     height: Int = 8
 ) {
     val animatedProgress = remember { Animatable(0f) }
-    LaunchedEffect(progress) {
+    
+    // Guard against NaN values (can happen with 0/0 division)
+    val safeProgress = if (progress.isNaN() || progress.isInfinite()) 0f else progress.coerceIn(0f, 1f)
+    
+    LaunchedEffect(safeProgress) {
         animatedProgress.animateTo(
-            targetValue = progress.coerceIn(0f, 1f),
+            targetValue = safeProgress,
             animationSpec = tween(600, easing = FastOutSlowInEasing)
         )
     }

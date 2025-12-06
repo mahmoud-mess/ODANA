@@ -64,11 +64,17 @@ import java.util.*
 
 class MainActivity : ComponentActivity() {
 
+    // Callback for when VPN permission is granted (used by onboarding)
+    private var onVpnPermissionGranted: (() -> Unit)? = null
+
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             startVpnService()
+            // Notify onboarding if there's a callback
+            onVpnPermissionGranted?.invoke()
+            onVpnPermissionGranted = null
         }
     }
     
@@ -81,6 +87,8 @@ class MainActivity : ComponentActivity() {
     }
     
     // Notification permission launcher (Android 13+)
+    private var onNotificationPermissionResult: (() -> Unit)? = null
+    
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -89,6 +97,9 @@ class MainActivity : ComponentActivity() {
         } else {
             android.util.Log.w("MainActivity", "Notification permission denied - alerts won't show notifications")
         }
+        // Notify onboarding regardless of result
+        onNotificationPermissionResult?.invoke()
+        onNotificationPermissionResult = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -100,9 +111,6 @@ class MainActivity : ComponentActivity() {
         
         // Schedule daily cleanup worker
         CleanupWorker.schedule(this)
-        
-        // Request notification permission on Android 13+
-        requestNotificationPermission()
 
         setContent {
             ODANATheme {
@@ -114,7 +122,10 @@ class MainActivity : ComponentActivity() {
                     onStartVpn = { checkAndStartVpn() },
                     onStopVpn = { stopVpnService() },
                     onExportJson = { startExport("json") },
-                    onExportCsv = { startExport("csv") }
+                    onExportCsv = { startExport("csv") },
+                    onRequestNotificationPermission = { requestNotificationPermission() },
+                    setVpnPermissionListener = { callback -> onVpnPermissionGranted = callback },
+                    setNotificationPermissionListener = { callback -> onNotificationPermissionResult = callback }
                 )
             }
         }
@@ -210,12 +221,56 @@ fun AppNavigation(
     onStartVpn: () -> Unit,
     onStopVpn: () -> Unit,
     onExportJson: () -> Unit,
-    onExportCsv: () -> Unit
+    onExportCsv: () -> Unit,
+    onRequestNotificationPermission: () -> Unit = {},
+    setVpnPermissionListener: ((() -> Unit)?) -> Unit = {},
+    setNotificationPermissionListener: ((() -> Unit)?) -> Unit = {}
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     var showProfiles by remember { mutableStateOf(false) }
     
+    // Check if onboarding has been completed
+    var showOnboarding by remember {
+        val prefs = context.getSharedPreferences("odana_prefs", android.content.Context.MODE_PRIVATE)
+        mutableStateOf(!prefs.getBoolean("onboarding_complete", false))
+    }
+    
+    // State to track when to advance from VPN page
+    var advanceFromVpnPage by remember { mutableStateOf(false) }
+    
+    // State to track when notification permission is handled
+    var notificationPermissionHandled by remember { mutableStateOf(false) }
+    
     when {
+        showOnboarding -> {
+            OnboardingScreen(
+                onComplete = {
+                    // Mark onboarding as complete
+                    context.getSharedPreferences("odana_prefs", android.content.Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean("onboarding_complete", true)
+                        .apply()
+                    showOnboarding = false
+                    // Auto-start VPN after onboarding
+                    onStartVpn()
+                },
+                onRequestVpnPermission = {
+                    // Set callback to advance page when permission granted
+                    setVpnPermissionListener { advanceFromVpnPage = true }
+                    onStartVpn()
+                },
+                onRequestNotificationPermission = {
+                    // Set callback to complete onboarding when permission handled
+                    setNotificationPermissionListener { notificationPermissionHandled = true }
+                    onRequestNotificationPermission()
+                },
+                advanceFromVpnPage = advanceFromVpnPage,
+                onVpnPageAdvanced = { advanceFromVpnPage = false },
+                notificationPermissionHandled = notificationPermissionHandled,
+                onNotificationHandled = { notificationPermissionHandled = false }
+            )
+        }
         showProfiles -> {
             ProfilesScreen(onBack = { showProfiles = false })
         }
