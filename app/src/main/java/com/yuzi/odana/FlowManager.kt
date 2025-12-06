@@ -380,23 +380,57 @@ object FlowManager {
                 if (nowFloodMode && !wasFloodMode) {
                     Log.w(TAG, "⚠️ FLOOD MODE ACTIVATED: $packetsPerSecond pkt/s - sampling 1:$FLOOD_SAMPLE_RATE")
                     
-                    // Create flood alert
+                    // Identify top contributors from active flows
+                    val flowsByApp = activeFlows.values
+                        .filter { it.appName != null && it.appName != "com.yuzi.odana" }
+                        .groupBy { it.appName ?: "Unknown" }
+                        .mapValues { it.value.size }
+                        .entries
+                        .sortedByDescending { it.value }
+                        .take(3)
+                    
+                    val topDestIps = activeFlows.values
+                        .groupBy { it.key.destIp }
+                        .mapValues { it.value.size }
+                        .entries
+                        .sortedByDescending { it.value }
+                        .take(3)
+                    
+                    // Format contributors
+                    val topAppsStr = if (flowsByApp.isNotEmpty()) {
+                        flowsByApp.joinToString(", ") { "${it.key.substringAfterLast('.')} (${it.value})" }
+                    } else "Unknown"
+                    
+                    val topIpsStr = if (topDestIps.isNotEmpty()) {
+                        topDestIps.joinToString(", ") { "${it.key} (${it.value})" }
+                    } else "Various"
+                    
+                    // Get the top app for the alert attribution
+                    val topApp = flowsByApp.firstOrNull()
+                    val topAppUid = if (topApp != null) {
+                        activeFlows.values.find { it.appName == topApp.key }?.appUid ?: -1
+                    } else -1
+                    
+                    Log.w(TAG, "Top contributors - Apps: $topAppsStr | IPs: $topIpsStr")
+                    
+                    // Create flood alert with contributor info
                     val floodAnomaly = AnomalyResult(
                         score = 0.85f,
                         severity = AnomalySeverity.MEDIUM,
                         reasons = listOf(
                             "Traffic flood detected: $packetsPerSecond packets/sec",
-                            "Sampling mode activated to prevent app crash",
-                            "May indicate DoS attempt or network scanning"
+                            "Top apps: $topAppsStr",
+                            "Top destinations: $topIpsStr",
+                            "Sampling mode activated to prevent app crash"
                         ),
                         breakdown = com.yuzi.odana.ml.ScoreBreakdown(
                             temporal = 0.2f,
                             volume = 1.0f,
                             destination = 0.5f
                         ),
-                        appUid = -1,
-                        appName = "System",
-                        flowKey = "Traffic Flood",
+                        appUid = topAppUid,
+                        appName = topApp?.key ?: "Multiple Apps",
+                        flowKey = "Flood: ${activeFlows.size} flows",
                         timestamp = System.currentTimeMillis()
                     )
                     addAnomaly(floodAnomaly)
