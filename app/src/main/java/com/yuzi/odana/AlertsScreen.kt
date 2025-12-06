@@ -42,6 +42,19 @@ import java.util.*
  * Displays detected anomalies with explanations.
  * Users can see what was flagged and why.
  */
+
+/**
+ * Data class for grouping anomalies by app.
+ */
+private data class AnomalyGroup(
+    val appName: String,
+    val appUid: Int,
+    val anomalies: List<AnomalyResult>
+) {
+    val count: Int get() = anomalies.size
+    val highestSeverity: AnomalySeverity get() = anomalies.maxByOrNull { it.severity.ordinal }?.severity ?: AnomalySeverity.NONE
+    val latestTimestamp: Long get() = anomalies.maxOfOrNull { it.timestamp } ?: 0L
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlertsScreen(
@@ -163,13 +176,33 @@ fun AlertsScreen(
                     }
                 }
             } else {
+                // Group anomalies by app
+                val groupedAnomalies = remember(anomalies) {
+                    anomalies
+                        .groupBy { it.appName ?: "Unknown" }
+                        .map { (appName, list) -> 
+                            AnomalyGroup(
+                                appName = appName,
+                                appUid = list.firstOrNull()?.appUid ?: -1,
+                                anomalies = list.sortedByDescending { it.timestamp }
+                            )
+                        }
+                        .sortedByDescending { it.anomalies.first().timestamp }
+                }
+                
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(anomalies, key = { "${it.timestamp}_${it.flowKey}" }) { anomaly ->
-                        AnomalyCard(anomaly = anomaly)
+                    items(groupedAnomalies, key = { it.appName }) { group ->
+                        if (group.anomalies.size == 1) {
+                            // Single anomaly - show directly
+                            AnomalyCard(anomaly = group.anomalies.first())
+                        } else {
+                            // Multiple anomalies - show grouped
+                            GroupedAnomalyCard(group = group)
+                        }
                     }
                     
                     // Bottom spacer
@@ -540,6 +573,270 @@ private fun AnomalyCard(anomaly: AnomalyResult) {
                 )
             }
         }
+    }
+}
+
+/**
+ * Grouped anomaly card - shows multiple alerts from the same app in a collapsible group.
+ */
+@Composable
+private fun GroupedAnomalyCard(group: AnomalyGroup) {
+    var expanded by remember { mutableStateOf(false) }
+    
+    val severityColor = when (group.highestSeverity) {
+        AnomalySeverity.HIGH -> ErrorRed
+        AnomalySeverity.MEDIUM -> WarningAmber
+        AnomalySeverity.LOW -> CyberGold
+        AnomalySeverity.NONE -> SuccessGreen
+    }
+    
+    val severityIcon = when (group.highestSeverity) {
+        AnomalySeverity.HIGH -> Icons.Filled.Error
+        AnomalySeverity.MEDIUM -> Icons.Filled.Warning
+        AnomalySeverity.LOW -> Icons.Outlined.Info
+        AnomalySeverity.NONE -> Icons.Filled.CheckCircle
+    }
+    
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded },
+        cornerRadius = 16.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            // Group header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Severity indicator with count badge
+                Box(
+                    modifier = Modifier.size(44.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(severityColor.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = severityIcon,
+                            contentDescription = null,
+                            tint = severityColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    
+                    // Count badge
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 4.dp, y = (-4).dp)
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(severityColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${group.count}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+                
+                // App info
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = group.appName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${group.count} alerts",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                
+                // Expand/collapse icon
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            
+            // Expanded: show individual anomaly cards
+            AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(
+                    modifier = Modifier.padding(top = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    
+                    group.anomalies.forEach { anomaly ->
+                        // Compact anomaly item
+                        CompactAnomalyItem(anomaly = anomaly)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Compact anomaly item for use inside grouped cards.
+ */
+@Composable
+private fun CompactAnomalyItem(anomaly: AnomalyResult) {
+    var expanded by remember { mutableStateOf(false) }
+    
+    val severityColor = when (anomaly.severity) {
+        AnomalySeverity.HIGH -> ErrorRed
+        AnomalySeverity.MEDIUM -> WarningAmber
+        AnomalySeverity.LOW -> CyberGold
+        AnomalySeverity.NONE -> SuccessGreen
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            .clickable { expanded = !expanded }
+            .padding(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Small severity dot
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(severityColor)
+            )
+            
+            // Flow key
+            Text(
+                text = anomaly.flowKey,
+                style = MonoSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            
+            // Time
+            Text(
+                text = formatTimestamp(anomaly.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+            )
+            
+            // Score
+            Text(
+                text = "${(anomaly.score * 100).toInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = severityColor
+            )
+        }
+        
+        // Primary reason
+        if (anomaly.reasons.isNotEmpty()) {
+            Text(
+                text = anomaly.reasons.first(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                overflow = if (expanded) TextOverflow.Visible else TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        
+        // Expanded details
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(
+                modifier = Modifier.padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Additional reasons
+                if (anomaly.reasons.size > 1) {
+                    anomaly.reasons.drop(1).forEach { reason ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("•", color = severityColor, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = reason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+                
+                // Score breakdown row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    MiniScoreItem("Time", anomaly.breakdown.temporal)
+                    MiniScoreItem("Vol", anomaly.breakdown.volume)
+                    MiniScoreItem("Dest", anomaly.breakdown.destination)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniScoreItem(label: String, score: Float) {
+    val color = when {
+        score >= 0.7f -> ErrorRed
+        score >= 0.4f -> WarningAmber
+        score > 0f -> CyberGold
+        else -> SuccessGreen
+    }
+    
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+        )
+        Text(
+            text = "${(score * 100).toInt()}%",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = color
+        )
     }
 }
 
